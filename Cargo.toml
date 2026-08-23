@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/tacit-core",
+    "crates/tacit-keeper",
+    "crates/tacit-mcp",
+    "crates/tacit-python",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
