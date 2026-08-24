@@ -124,7 +124,7 @@ fn a_ledger_survives_a_round_trip() {
         "state survives because the verdict was replayed, not because it was stored"
     );
     assert_eq!(ledger.registered_gaps().len(), 1);
-    assert_eq!(ledger.pending_proposals().len(), 1);
+    assert_eq!(ledger.pending_proposals().queued.len(), 1);
 
     // Envelope detail survives intact.
     let record = ledger.record(promoted).unwrap();

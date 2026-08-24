@@ -1120,6 +1120,33 @@ mod tests {
         assert_eq!(withdraw_reason(ledger.history(old)[0]), Some(WithdrawReason::Superseded));
     }
 
+    /// The case that raised U-30: rewording a `registered` hypothesis leaves two
+    /// proposed title claims, because the verdict that retires a predecessor
+    /// can only retire one that reached promoted, and neither of these did.
+    #[test]
+    fn rewording_leaves_one_wording_in_the_inbox_not_two() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        ingest_text(&mut ledger, &hypothesis_doc("Within six months it self-hosts."), None, &root)
+            .expect("first ingest");
+        let before = ledger.pending_proposals().queued.len();
+
+        ingest_text(&mut ledger, &hypothesis_doc("Within nine months it self-hosts."), None, &root)
+            .expect("second ingest");
+        let after = ledger.pending_proposals();
+
+        assert_eq!(after.queued.len(), before, "a reviewer reads one wording, not two");
+        assert!(!after.superseded.is_empty(), "and the one it replaced is still in the record");
+        // Nothing was closed, because nothing was decided: the predecessor is
+        // still proposed, and only a person can say otherwise.
+        for record in &after.superseded {
+            assert_eq!(
+                ledger.state_of(record.id()),
+                Some(RecordState::Claim(ClaimState::Proposed))
+            );
+        }
+    }
+
     #[test]
     fn a_reworded_open_register_row_supersedes_the_wording_it_replaces() {
         let root = repo_root();

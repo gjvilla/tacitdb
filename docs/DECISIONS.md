@@ -789,6 +789,59 @@ which is worth remembering as a rule rather than rediscovering a third time.
 
 ---
 
+## D-0024 · A draft its author replaced is not a second thing to review
+
+```yaml
+id: D-0024
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: grammar round — resolves U-30
+evidence: [design/001-data-model.md §3.2, docs/REGISTER.md]
+review_trigger: when an author wants to retract a proposal outright rather than
+  replace it, or when set verdicts (U-16) need to clear many drafts at once
+```
+
+**Assertion.** A proposed claim that a later record supersedes keeps its state —
+it is still proposed, because nobody ruled on it — and stops being a separate
+entry in the keeper's inbox. `pending_proposals` returns the head of each
+supersession chain alongside the drafts folded behind it, both lists present, so
+nothing is filtered away silently.
+
+**Forces.** The complaint in U-30 was that a reviewer seeing two wordings of one
+record cannot tell which the document currently says. That is a fault in the
+queue, not in the state. The state is honest: an author editing their own
+unreviewed draft is not a verdict, and invariant 4 is right to refuse to let it
+act like one.
+
+**The tempting wrong fix was a transcribed rejection.** Rejecting means a person
+looked at something and said no. Nobody looked. Manufacturing a human verdict
+for a record no human judged is precisely the forgery the ratchet exists to
+prevent — and it would have been easy, because the ingest already transcribes
+verdicts and one more would not have looked out of place.
+
+**Nothing is filtered silently.** Both lists come back, and the MCP tool reports
+the folded count beside the listed one. A queue that quietly drops records is
+how a reviewer comes to believe they have seen everything.
+
+**A rejected replacement does not revive what it replaced.** The reviewer said no
+to the wording the author stands behind; that is not a yes to the one they
+abandoned. Only the author can put it back, by proposing it again.
+
+**A fork is surfaced, not prevented.** Two records may declare they replaced the
+same one. `replaced_by` returns both and the queue lists both — the same posture
+invariant 7 takes toward contradictions, for the same reason: the engine does not
+get to pick.
+
+**Only claims needed this.** A superseded gap is withdrawn and a superseded
+hypothesis abandoned (D-0023); both leave the live set by a verdict of their own.
+A claim cannot, because the verdict that retires a predecessor is
+`Promote { retiring }` and it can only retire one that reached promoted. A draft
+replaced before anyone read it never did.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

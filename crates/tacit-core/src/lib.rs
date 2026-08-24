@@ -40,7 +40,7 @@ pub use envelope::{
 pub use error::Error;
 pub use id::{EntityId, IdParseError, RecordId};
 pub use journal::{Event, Recovery};
-pub use ledger::{Contradiction, Ledger, Opened, ReviewQueue, SOURCE_KIND};
+pub use ledger::{Contradiction, Ledger, Opened, Pending, ReviewQueue, SOURCE_KIND};
 pub use measurement::{Measurement, MeasurementTarget};
 pub use projection::{
     CostSpec, CostTransform, Edge, GraphView, MissingCost, Node, Path, Projection, Property,

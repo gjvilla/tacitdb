@@ -188,6 +188,14 @@ fn an_agent_can_propose_but_what_it_proposes_stays_proposed() {
         .filter(|r| r["author"] == "test-agent")
         .count();
     assert_eq!(mine, 1);
+    // The inbox counts what it lists, and reports separately anything a later
+    // draft replaced — a queue that quietly drops records is how a reviewer
+    // comes to believe they have seen everything (U-30).
+    assert_eq!(
+        pending["count"].as_u64().unwrap() as usize,
+        pending["records"].as_array().unwrap().len()
+    );
+    assert!(pending["superseded_and_not_queued"].is_number());
 
     // And it has no verdict history, because no verdict is reachable from here.
     let history = host.call("tacit_history", json!({"record_id": id}));

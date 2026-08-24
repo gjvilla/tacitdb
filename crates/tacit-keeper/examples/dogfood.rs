@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!(
         "  pending proposals {}   registered gaps {}   contradictions {}",
-        ledger.pending_proposals().len(),
+        ledger.pending_proposals().queued.len(),
         ledger.registered_gaps().len(),
         ledger.contradictions().len()
     );
@@ -309,7 +309,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = ledger.review_queue(jiff::Timestamp::now());
     println!("  due for review        {}", queue.due.len());
     println!("  promoted, no trigger  {}", queue.missing_trigger.len());
-    println!("  awaiting a verdict    {}", ledger.pending_proposals().len());
+    let pending = ledger.pending_proposals();
+    println!("  awaiting a verdict    {}", pending.queued.len());
+    if !pending.superseded.is_empty() {
+        println!(
+            "  replaced before read  {}  (still proposed — an author editing an unreviewed\n  \
+             draft is not a verdict — but not queued twice)",
+            pending.superseded.len()
+        );
+    }
     println!(
         "  ({} title transcriptions carry no trigger of their own; {} mention edges\n  \
          await ratification.)",

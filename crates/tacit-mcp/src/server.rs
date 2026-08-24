@@ -115,6 +115,16 @@ pub struct RecordsOutput {
     pub records: Vec<RecordOut>,
 }
 
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct PendingOutput {
+    pub count: usize,
+    pub records: Vec<RecordOut>,
+    /// Proposals a later draft replaced before anyone ruled on them. Still in
+    /// the record and still proposed — reported here rather than dropped, so
+    /// the count above is never mistaken for everything unreviewed.
+    pub superseded_and_not_queued: usize,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ProposeClaimParams {
     /// What you are claiming, in plain language.
@@ -361,18 +371,22 @@ impl TacitServer {
     #[tool(
         name = "tacit_pending_proposals",
         description = "Claims awaiting a human verdict — the keeper's inbox, including anything \
-                       agents have proposed."
+                       agents have proposed. A draft its own author has already replaced is \
+                       counted separately rather than listed twice."
     )]
-    fn pending_proposals(&self) -> Json<RecordsOutput> {
+    fn pending_proposals(&self) -> Json<PendingOutput> {
         let mut store = self.store.lock().expect("store lock");
-        let records: Vec<RecordOut> = store
-            .ledger
-            .pending_proposals()
-            .iter()
-            .map(|r| RecordOut::of(&store.ledger, r))
-            .collect();
-        let output = RecordsOutput { count: records.len(), records };
-        store.record_call("tacit_pending_proposals", "", format!("{} pending", output.count));
+        let pending = store.ledger.pending_proposals();
+        let superseded_and_not_queued = pending.superseded.len();
+        let records: Vec<RecordOut> =
+            pending.queued.iter().map(|r| RecordOut::of(&store.ledger, r)).collect();
+        let output =
+            PendingOutput { count: records.len(), records, superseded_and_not_queued };
+        store.record_call(
+            "tacit_pending_proposals",
+            "",
+            format!("{} pending, {superseded_and_not_queued} superseded", output.count),
+        );
         Json(output)
     }
 

@@ -173,7 +173,11 @@ application:
 3. **Record-time is engine-assigned.** `recorded_at` is set by the engine;
    history is never rewritten.
 4. **State changes only by verdict.** A record's state is derived exclusively
-   from verdict records referencing it. *Corollary (added 2026-08-23, D-0016):
+   from verdict records referencing it. *Corollary (added 2026-08-24, D-0024):
+   an author replacing their own unreviewed draft is not a verdict and does not
+   move it. What supersession changes is the draft's claim on a reviewer's
+   attention, which is a property of the queue and not of the record.*
+   *Corollary (added 2026-08-23, D-0016):
    the write path holds no reference to any projection or derived view. A
    verdict validated against a stale view would write permanent corruption
    into an append-only log, where a stale read is merely a stale read.*

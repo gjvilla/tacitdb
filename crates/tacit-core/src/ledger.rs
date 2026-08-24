@@ -40,6 +40,10 @@ pub struct Ledger {
     log: Vec<RecordId>,
     /// Record → verdicts touching it, in log order.
     by_target: BTreeMap<RecordId, Vec<RecordId>>,
+    /// Record → the records that supersede it, in log order. The reverse of
+    /// `Envelope::supersedes`, kept because the question a reader actually
+    /// asks is "what replaced this?", and scanning for it is the wrong shape.
+    replacements: BTreeMap<RecordId, Vec<RecordId>>,
     /// Highest record-time appended. The log must be a prefix of time.
     last_recorded_at: Option<Timestamp>,
     panel: BTreeMap<(MeasurementTarget, String), Measurement>,
@@ -57,6 +61,34 @@ pub struct Ledger {
 pub struct Opened {
     pub ledger: Ledger,
     pub recovery: Recovery,
+}
+
+/// The keeper's inbox, and what was folded out of it.
+///
+/// Both lists are present rather than one being filtered away silently: a
+/// queue that quietly drops records is how a reviewer comes to believe they
+/// have seen everything.
+#[derive(Debug)]
+pub struct Pending<'a> {
+    /// Proposals awaiting a verdict, one per supersession chain — the wording
+    /// its author currently stands behind.
+    pub queued: Vec<&'a Record>,
+    /// Proposals a later record replaced before anyone ruled on them.
+    ///
+    /// Still proposed, and correctly so: nobody ruled on them, and an author
+    /// editing their own unreviewed draft is not a verdict (invariant 4). What
+    /// changed is not their state but their claim on a reviewer's attention —
+    /// reading a wording its author has already replaced is spent attention,
+    /// and seeing two of them is worse than seeing neither.
+    pub superseded: Vec<&'a Record>,
+}
+
+impl<'a> Pending<'a> {
+    /// Everything still proposed, queued or not — the old flat reading, for a
+    /// caller that genuinely wants all of it.
+    pub fn all(&self) -> impl Iterator<Item = &'a Record> {
+        self.queued.iter().copied().chain(self.superseded.iter().copied())
+    }
 }
 
 /// The keeper's review work-queue (design/001 §8): promoted claims due for
@@ -346,6 +378,9 @@ impl Ledger {
                 self.by_target.entry(touched).or_default().push(id);
             }
         }
+        if let Some(prior) = record.envelope().supersedes() {
+            self.replacements.entry(prior).or_default().push(id);
+        }
         self.records.insert(id, record);
         self.log.push(id);
         self.last_recorded_at = Some(recorded_at);
@@ -613,14 +648,45 @@ impl Ledger {
         })
     }
 
-    /// Proposed claims awaiting a verdict — the keeper's inbox.
-    pub fn pending_proposals(&self) -> Vec<&Record> {
-        self.records()
-            .filter(|r| {
-                r.kind() == RecordKind::Claim
-                    && self.state_of(r.id()) == Some(RecordState::Claim(ClaimState::Proposed))
-            })
-            .collect()
+    /// The records that supersede this one, in log order.
+    ///
+    /// Usually empty or one. More than one is a fork — two authors each
+    /// declaring they replaced the same record — which is legal, surfaced
+    /// rather than prevented, and the same posture invariant 7 takes toward
+    /// contradictions.
+    pub fn replaced_by(&self, id: RecordId) -> &[RecordId] {
+        self.replacements.get(&id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Proposed claims awaiting a verdict — the keeper's inbox, split into
+    /// what to read and what a later draft already replaced.
+    ///
+    /// Only claims need this. A superseded gap is withdrawn and a superseded
+    /// hypothesis abandoned (D-0023), so both leave the live set through a
+    /// verdict of their own. A claim cannot: the verdict that retires a
+    /// predecessor is `Promote { retiring }`, and it can only retire a claim
+    /// that reached promoted. One replaced before anyone ruled on it never
+    /// did, so nothing closes it — and nothing should, because no one decided
+    /// anything about it (U-30).
+    pub fn pending_proposals(&self) -> Pending<'_> {
+        let mut queued = Vec::new();
+        let mut superseded = Vec::new();
+        for record in self.records() {
+            if record.kind() != RecordKind::Claim
+                || self.state_of(record.id()) != Some(RecordState::Claim(ClaimState::Proposed))
+            {
+                continue;
+            }
+            // Whatever became of the successor: a rejected replacement does not
+            // revive the draft it replaced. The author moved on, and only the
+            // author can move back — by proposing again.
+            if self.replaced_by(record.id()).is_empty() {
+                queued.push(record);
+            } else {
+                superseded.push(record);
+            }
+        }
+        Pending { queued, superseded }
     }
 
     /// Registered gaps — the honest boundary of the record.
@@ -1384,8 +1450,79 @@ mod tests {
         let a = ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap();
         let b = ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap();
         ledger.append(promote(a)).unwrap();
-        let pending: Vec<_> = ledger.pending_proposals().iter().map(|r| r.id()).collect();
+        let pending: Vec<_> =
+            ledger.pending_proposals().queued.iter().map(|r| r.id()).collect();
         assert_eq!(pending, vec![b]);
+    }
+
+    // ── U-30: a draft its own author replaced ───────────────────────────────
+
+    #[test]
+    fn a_draft_its_author_replaced_is_not_queued_twice() {
+        let (mut ledger, _, subject) = setup();
+        let first = ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap();
+        let mut second = attribute_claim(subject, Author::agent("miner"));
+        second.supersedes = Some(first);
+        let second = ledger.append(second).unwrap();
+        let mut third = attribute_claim(subject, Author::agent("miner"));
+        third.supersedes = Some(second);
+        let third = ledger.append(third).unwrap();
+
+        let pending = ledger.pending_proposals();
+        // One wording to read, not three.
+        assert_eq!(pending.queued.iter().map(|r| r.id()).collect::<Vec<_>>(), vec![third]);
+        assert_eq!(
+            pending.superseded.iter().map(|r| r.id()).collect::<Vec<_>>(),
+            vec![first, second]
+        );
+
+        // Nothing was hidden and nothing moved: all three are still proposed,
+        // because an author editing an unreviewed draft is not a verdict.
+        assert_eq!(pending.all().count(), 3);
+        for id in [first, second, third] {
+            assert_eq!(ledger.state_of(id), Some(RecordState::Claim(ClaimState::Proposed)));
+        }
+        assert_eq!(ledger.replaced_by(first), &[second]);
+        assert_eq!(ledger.replaced_by(third), &[]);
+    }
+
+    #[test]
+    fn a_rejected_replacement_does_not_revive_the_draft_it_replaced() {
+        let (mut ledger, _, subject) = setup();
+        let first = ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap();
+        let mut second = attribute_claim(subject, Author::agent("miner"));
+        second.supersedes = Some(first);
+        let second = ledger.append(second).unwrap();
+        ledger
+            .append(verdict(VerdictAction::Reject { target: second }, Author::human("Greg")))
+            .unwrap();
+
+        // The reviewer said no to the wording the author stands behind. That is
+        // not a yes to the one they abandoned — only the author can put that
+        // back, by proposing it again.
+        let pending = ledger.pending_proposals();
+        assert!(pending.queued.is_empty());
+        assert_eq!(pending.superseded.iter().map(|r| r.id()).collect::<Vec<_>>(), vec![first]);
+    }
+
+    #[test]
+    fn two_drafts_replacing_one_record_are_surfaced_rather_than_prevented() {
+        let (mut ledger, _, subject) = setup();
+        let original = ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap();
+        let mut a = attribute_claim(subject, Author::agent("miner"));
+        a.supersedes = Some(original);
+        let a = ledger.append(a).unwrap();
+        let mut b = attribute_claim(subject, Author::human("Greg"));
+        b.supersedes = Some(original);
+        let b = ledger.append(b).unwrap();
+
+        // A fork: two authors each declaring they replaced the same record. Left
+        // legal and made visible, the same posture invariant 7 takes toward
+        // contradictions — the engine does not get to pick.
+        assert_eq!(ledger.replaced_by(original), &[a, b]);
+        let pending = ledger.pending_proposals();
+        assert_eq!(pending.queued.iter().map(|r| r.id()).collect::<Vec<_>>(), vec![a, b]);
+        assert_eq!(pending.superseded.len(), 1);
     }
 
     #[test]
