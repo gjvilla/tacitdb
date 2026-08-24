@@ -579,6 +579,59 @@ correct but slow in bulk (U-25).
 
 ---
 
+## D-0020 · Vector candidates: the engine owns the index, never the model
+
+```yaml
+id: D-0020
+state: promoted
+author: Greg Villa
+recorded: 2026-08-23
+valid_from: 2026-08-23
+source: retrieval round — narrows U-23
+evidence: [design/001-data-model.md, GOLDEN.md]
+review_trigger: when a model whose similarity separates answerable from
+  unanswerable questions is plugged in, revisit whether similarity may confer
+  confidence
+```
+
+**Assertion.** The engine defines an `Embedder` trait and owns a `VectorIndex`
+keyed by model id; it never owns a model. Vector candidates join lexical ones
+through the fusion stage that was built for them. A built-in hashing embedder
+over character n-grams ships as the default — deterministic, dependency-free,
+no network — and is documented for what it is: robustness to spelling and
+morphology, not meaning.
+
+**Forces.** A vendor model inside the engine would make the corpus hostage to
+it, which contradicts the reason the record is kept separately from the voice
+that reads it. Embeddings were already specified as derived artifacts keyed by
+model id, so swapping models rebuilds an index and moves not one governed
+record. And a network dependency would have made the tests and the demo
+unrunnable without a key, against R-9.
+
+**Similarity may raise a question; it may not assert an answer.** This was
+measured, not assumed. Across the golden questions the hashing embedder's
+top-hit similarity spans 0.49–0.66 for answerable questions and 0.47–0.60 for
+unanswerable ones — overlapping ranges, so no threshold separates them, and
+any vector-derived confidence would be fitted noise. The first attempt did let
+similarity confer confidence, and the suite caught it immediately: two
+calibration failures fixed, three abstentions destroyed, net worse. Confidence
+therefore stays on the lexical coverage signal, which does discriminate, while
+similarity is allowed the weaker act of surfacing an open question the reader
+can dismiss.
+
+**What it bought, honestly.** One golden question, by improving the ranking
+rather than the confidence rule: 10/14 to 11/14, with abstentions intact and
+no regressions. It did not close U-23. A model that can see meaning remains
+the gap, and the trait is how it arrives.
+
+**Alternatives rejected.** An embedding API (network, key, and a vendor in the
+engine); a local neural model (a heavy dependency and model weights in a
+repository that has neither); shipping no vectors until a real model exists
+(the plumbing is the part worth having in place, and building it revealed the
+confidence finding above, which is worth more than the ranking improvement).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

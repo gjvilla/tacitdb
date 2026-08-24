@@ -9,6 +9,7 @@
 //! view that the write path cannot reference.
 
 mod content;
+mod embedding;
 mod entity;
 mod envelope;
 mod error;
@@ -31,6 +32,7 @@ pub use content::{
     ClaimContent, Content, GapContent, HypothesisContent, RecordKind, RetireReason, ScoreOutcome,
     VerdictAction, VerdictContent,
 };
+pub use embedding::{Embedded, Embedder, HashingEmbedder, VectorIndex, similarity};
 pub use entity::Entity;
 pub use envelope::{
     Author, AuthorKind, ENVELOPE_VERSION, Envelope, Evidence, ReviewTrigger, SourceRef,

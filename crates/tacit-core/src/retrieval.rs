@@ -25,6 +25,7 @@
 //! authoritative.
 
 use crate::content::{ClaimContent, Content};
+use crate::embedding::{Embedder, VectorIndex, similarity};
 use crate::id::{EntityId, RecordId};
 use crate::ledger::Ledger;
 use crate::projection::{GraphView, Projection, ViewSpec};
@@ -179,7 +180,13 @@ impl TextIndex {
         projection: &'a Projection,
         spec: ViewSpec,
     ) -> Retriever<'a> {
-        Retriever { index: self, ledger, projection, view: projection.view(ledger, spec) }
+        Retriever {
+            index: self,
+            ledger,
+            projection,
+            view: projection.view(ledger, spec),
+            vectors: None,
+        }
     }
 }
 
@@ -255,6 +262,10 @@ pub struct Query {
     /// How many open questions to offer at most. An abstention that lists
     /// every gap in the register has not helped anyone.
     pub gap_budget: usize,
+    /// Cosine similarity at or above which a vector-close record is worth
+    /// offering as a possibly-relevant open question. Deliberately *not* used
+    /// to confer confidence on an answer — see the note in `retrieve`.
+    pub min_similarity: f32,
 }
 
 impl Query {
@@ -269,6 +280,7 @@ impl Query {
             min_coverage: 0.5,
             stopwords: DEFAULT_STOPWORDS.iter().map(|s| s.to_string()).collect(),
             gap_budget: 3,
+            min_similarity: 0.5,
         }
     }
 
@@ -292,6 +304,11 @@ impl Query {
         self
     }
 
+    pub fn with_min_similarity(mut self, min_similarity: f32) -> Self {
+        self.min_similarity = min_similarity;
+        self
+    }
+
     pub fn with_min_coverage(mut self, min_coverage: f64) -> Self {
         self.min_coverage = min_coverage;
         self
@@ -312,6 +329,11 @@ impl Query {
 pub enum Via {
     /// Matched the query text directly.
     Lexical,
+    /// Matched by vector similarity only — the signal that survives spelling
+    /// and morphology a token index cannot bridge.
+    Vector,
+    /// Both rankings found it. The strongest evidence available here.
+    Hybrid,
     /// Reached by graph expansion from a seed, with the edges traversed.
     Expanded { from: RecordId, path: Vec<RecordId> },
 }
@@ -325,6 +347,8 @@ pub struct Item<'a> {
     pub score: f64,
     /// The best underlying ranker score. This is what `min_score` judges.
     pub relevance: f64,
+    /// Cosine similarity to the query, when vector candidates are in play.
+    pub similarity: f64,
     pub via: Via,
 }
 
@@ -436,22 +460,74 @@ pub struct Retriever<'a> {
     ledger: &'a Ledger,
     projection: &'a Projection,
     view: GraphView<'a>,
+    vectors: Option<(&'a VectorIndex, &'a dyn Embedder)>,
 }
 
 impl<'a> Retriever<'a> {
+    /// Add vector candidates. Without this the plan runs lexical-only, which
+    /// is exactly what it did before there was a second ranker — the fusion
+    /// stage was built for this moment.
+    pub fn with_vectors(
+        mut self,
+        vectors: &'a VectorIndex,
+        embedder: &'a dyn Embedder,
+    ) -> Self {
+        self.vectors = Some((vectors, embedder));
+        self
+    }
+
     pub fn view(&self) -> GraphView<'a> {
         self.view
+    }
+
+    /// Cosine similarity against every record the view admits, checked before
+    /// scoring rather than after (R-1). Exact rather than approximate: at this
+    /// scale an exact scan is correct and fast, and an ANN structure is U-26.
+    fn vector_candidates(&self, query: &Query) -> Vec<(RecordId, f64)> {
+        let Some((index, embedder)) = self.vectors else { return Vec::new() };
+        let probe = embedder.embed(&query.text);
+        if probe.iter().all(|v| *v == 0.0) {
+            return Vec::new();
+        }
+        let scope: BTreeSet<EntityId> = query.entity_scope.iter().copied().collect();
+
+        let mut ranked: Vec<(RecordId, f64)> = index
+            .iter()
+            .filter(|(id, _)| {
+                if !scope.is_empty() {
+                    let in_scope = self
+                        .index
+                        .docs
+                        .get(*id)
+                        .is_some_and(|d| d.entities.iter().any(|e| scope.contains(e)));
+                    if !in_scope {
+                        return false;
+                    }
+                }
+                self.view.admits_record(**id)
+            })
+            .map(|(id, embedded)| (*id, f64::from(similarity(&probe, &embedded.vector))))
+            .filter(|(_, score)| *score > 0.0)
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
+        });
+        ranked
     }
 
     /// One plan: candidates, filter, expansion, fusion, budget.
     pub fn retrieve(&self, query: &Query) -> Retrieved<'a> {
         let candidates = self.lexical_candidates(query);
-        let lexical = candidates.ranked.clone();
-        // Fusion over one ranking today; the stage exists so a vector ranking
-        // joins here rather than in an application.
-        let fused = fuse(&[lexical], &query.fusion);
+        let vector = self.vector_candidates(query);
+        let rankings: Vec<Vec<(RecordId, f64)>> = if vector.is_empty() {
+            vec![candidates.ranked.clone()]
+        } else {
+            vec![candidates.ranked.clone(), vector.clone()]
+        };
+        let fused = fuse(&rankings, &query.fusion);
 
         let raw: BTreeMap<RecordId, f64> = candidates.ranked.iter().copied().collect();
+        let similarities: BTreeMap<RecordId, f64> = vector.iter().copied().collect();
         let mut items: Vec<Item<'a>> = fused
             .iter()
             .filter_map(|(id, score)| {
@@ -459,7 +535,12 @@ impl<'a> Retriever<'a> {
                     record,
                     score: *score,
                     relevance: raw.get(id).copied().unwrap_or(0.0),
-                    via: Via::Lexical,
+                    similarity: similarities.get(id).copied().unwrap_or(0.0),
+                    via: match (raw.contains_key(id), similarities.contains_key(id)) {
+                        (true, true) => Via::Hybrid,
+                        (false, true) => Via::Vector,
+                        _ => Via::Lexical,
+                    },
                 })
             })
             .collect();
@@ -469,8 +550,18 @@ impl<'a> Retriever<'a> {
             items.extend(self.expand(&seeds, expansion));
         }
 
-        // Confidence is coverage first, score second: a result that shares two
-        // incidental words with a six-word question has not answered it.
+        // Confidence stays on the lexical signal, deliberately, and this was
+        // measured rather than assumed. Over the golden questions the
+        // hashing embedder's top-hit similarity ranges 0.49–0.66 for
+        // answerable questions and 0.47–0.60 for unanswerable ones: the
+        // distributions overlap, so no threshold separates them and any
+        // vector-derived confidence would be fitted noise.
+        //
+        // The asymmetry that survives is the useful one. Similarity is good
+        // enough to *raise a question* — an offer the reader can dismiss —
+        // and not good enough to *assert an answer*. Offers get the weaker
+        // signal; assertions do not. A model whose similarity does separate
+        // the two can revisit this, which is what `min_similarity` is for.
         let best = items.first().map(|i| i.relevance).unwrap_or(0.0);
         let coverage =
             items.first().map(|i| candidates.coverage(&i.record.id())).unwrap_or(0.0);
@@ -626,6 +717,7 @@ impl<'a> Retriever<'a> {
                                 // a match: it never outranks a direct hit.
                                 score: 0.0,
                                 relevance: 0.0,
+                                similarity: 0.0,
                                 via: Via::Expanded { from: *seed, path: path.clone() },
                             });
                         }
@@ -680,15 +772,25 @@ impl<'a> Retriever<'a> {
         // word, which is the wrong instinct when choosing which open question
         // to raise.
         let gap_coverage = query.min_coverage * GAP_COVERAGE_RATIO;
+        let closeness: BTreeMap<RecordId, f64> =
+            self.vector_candidates(&scoped).into_iter().collect();
         let mut scored: Vec<(f64, &'a Record)> = Vec::new();
-        for (id, _) in &candidates.ranked {
-            let coverage = candidates.coverage(id);
-            if coverage < gap_coverage {
+        let ids: BTreeSet<RecordId> = candidates
+            .ranked
+            .iter()
+            .map(|(id, _)| *id)
+            .chain(closeness.keys().copied())
+            .collect();
+        for id in ids {
+            let coverage = candidates.coverage(&id);
+            let close = closeness.get(&id).copied().unwrap_or(0.0);
+            // Either signal can raise a question worth asking.
+            if coverage < gap_coverage && close < f64::from(query.min_similarity) {
                 continue;
             }
-            let Some(record) = self.ledger.record(*id) else { continue };
+            let Some(record) = self.ledger.record(id) else { continue };
             if matches!(record.content(), Content::Gap(_)) {
-                scored.push((coverage, record));
+                scored.push((coverage.max(close), record));
             }
         }
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -1140,5 +1242,144 @@ mod tests {
             "promotion changes retrievability with no reindex"
         );
         let _ = ClaimState::Promoted;
+    }
+}
+
+#[cfg(test)]
+mod vector_tests {
+    use super::*;
+    use crate::embedding::HashingEmbedder;
+    use crate::envelope::{Author, SourceRef};
+    use crate::record::Draft;
+    use crate::content::{VerdictAction, VerdictContent};
+
+    fn promoted_claim(ledger: &mut Ledger, subject: EntityId, body: &str) -> RecordId {
+        let id = ledger
+            .append(Draft::new(
+                Author::human("Greg"),
+                SourceRef::channel("interview"),
+                Content::Claim(ClaimContent::Text { body: body.into(), about: vec![subject] }),
+            ))
+            .unwrap();
+        ledger
+            .append(Draft::new(
+                Author::human("Greg"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Promote { target: id, retiring: None },
+                    rationale: None,
+                }),
+            ))
+            .unwrap();
+        id
+    }
+
+    fn fixture() -> (Ledger, EntityId) {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("topic", "licensing").unwrap();
+        promoted_claim(&mut ledger, subject, "the engine license will be permissive");
+        (ledger, subject)
+    }
+
+    /// What the second ranker actually buys: a record whose wording differs
+    /// from the question by spelling, which a token index cannot bridge.
+    #[test]
+    fn vectors_reach_what_the_token_index_cannot() {
+        let (ledger, _) = fixture();
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+        let query = Query::text("licence");
+
+        let lexical = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .retrieve(&query);
+        assert!(lexical.items.is_empty(), "no token matches 'licence' exactly");
+
+        let hybrid = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&vectors, &embedder)
+            .retrieve(&query);
+        assert!(!hybrid.items.is_empty(), "the vector ranker bridges the spelling");
+        assert!(matches!(hybrid.items[0].via, Via::Vector | Via::Hybrid));
+        assert!(hybrid.items[0].similarity > 0.0);
+    }
+
+    /// The measured decision, held down as a test: similarity does not confer
+    /// confidence. A vector-only hit is reported, and reported as weak.
+    #[test]
+    fn a_vector_only_hit_does_not_claim_a_match() {
+        let (ledger, _) = fixture();
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+
+        let found = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&vectors, &embedder)
+            .retrieve(&Query::text("licence"));
+        assert_eq!(found.outcome, Outcome::WeakMatches);
+        assert!(found.is_abstention(), "a close vector is an offer, not an answer");
+    }
+
+    #[test]
+    fn the_view_filter_still_applies_to_vector_candidates() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("topic", "licensing").unwrap();
+        // Proposed, never promoted.
+        ledger
+            .append(Draft::new(
+                Author::agent("miner"),
+                SourceRef::channel("pipeline"),
+                Content::Claim(ClaimContent::Text {
+                    body: "the engine license will be permissive".into(),
+                    about: vec![subject],
+                }),
+            ))
+            .unwrap();
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+
+        let default = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&vectors, &embedder)
+            .retrieve(&Query::text("licence"));
+        assert!(default.items.is_empty(), "an unpromoted claim stays out of the default view");
+
+        let with_proposed = index
+            .retriever(
+                &ledger,
+                &projection,
+                ViewSpec::now().with_states(crate::projection::StateFilter::PromotedAndProposed),
+            )
+            .with_vectors(&vectors, &embedder)
+            .retrieve(&Query::text("licence"));
+        assert!(!with_proposed.items.is_empty());
+    }
+
+    #[test]
+    fn the_vector_index_folds_like_every_other_index() {
+        let (mut ledger, subject) = fixture();
+        let embedder = HashingEmbedder::default();
+        let mut incremental = crate::embedding::VectorIndex::empty(embedder.model_id());
+        incremental.advance(&ledger, &embedder);
+        promoted_claim(&mut ledger, subject, "a second claim about licensing");
+        incremental.advance(&ledger, &embedder);
+        assert_eq!(incremental, crate::embedding::VectorIndex::rebuild(&ledger, &embedder));
+        assert_eq!(incremental.advance(&ledger, &embedder), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot mix model ids")]
+    fn mixing_model_ids_fails_loudly() {
+        let (ledger, _) = fixture();
+        let first = HashingEmbedder::default();
+        let mut index = crate::embedding::VectorIndex::rebuild(&ledger, &first);
+        let other = HashingEmbedder::new(128, &[3]);
+        index.advance(&ledger, &other);
     }
 }

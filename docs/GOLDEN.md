@@ -38,17 +38,25 @@ the runner counts and prints the shortfalls separately from the passes, and it
 announces any question that starts passing so the register entry can be
 reconsidered. A shortfall with no registered cause is a regression.
 
-All four are the same cause — lexical ranking with no semantic candidates:
+Three remain, all the same cause — a ranker that matches words rather than
+meaning:
 
-- **G-07, G-08** surface the correct record at rank one and then decline to
-  call it a match. Recall is fine; confidence calibration is not.
-- **G-09** answers confidently about "storage" from records that merely use the
-  word, instead of abstaining to the open question that actually covers it.
-- **G-10** asks about "licence" where the register writes "license". A lexical
-  index cannot see that those are one word, which is close to the shortest
-  possible demonstration of why U-23 is registered. The question keeps the
+- **G-08** surfaces the correct record at rank one and then declines to call it
+  a match. Recall is fine; confidence calibration is not.
+- **G-09** answers confidently from records that merely use the word "storage",
+  instead of abstaining to the open question that actually covers it.
+- **G-10** asks about a "licence" where the register writes "license". Vector
+  candidates now bridge that spelling well enough to *reach* the record, which
+  is why this failure moved from bluffing to simply not citing the right open
+  question — but not well enough to pick U-17 out. The question keeps the
   spelling a person might reasonably type; tuning it to match the corpus would
   be tuning the instrument to the result.
+
+A methodological note, learned the hard way and tracked as U-27: this corpus
+describes itself, so a register entry that quotes a golden question's exact
+phrasing will rank for that question and displace the record it was asking
+about. U-23 did precisely that until it was reworded. When adding a question,
+check that no record was written *about* it.
 
 ## Questions
 
@@ -60,7 +68,7 @@ All four are the same cause — lexical ranking with no semantic candidates:
 | G-04 | what separates the governed ledger from the instrument panel | answer D-0013 | Greg Villa | when the two-ledger boundary is redrawn |
 | G-05 | what workload is v1 designed against | answer D-0003 | Greg Villa | when the v1 workload changes |
 | G-06 | is this a personal project or owned by an employer | answer D-0010 | Greg Villa | when U-7 resolves |
-| G-07 | why was the working name retired | answer D-0011 (pending U-23) | Greg Villa | when U-6 resolves |
+| G-07 | why was the working name retired | answer D-0011 | Greg Villa | when U-6 resolves |
 | G-08 | what did the prior art survey conclude about building versus adopting | answer D-0008 (pending U-23) | Greg Villa | when a surveyed engine ships the wedge |
 | G-09 | which storage engine does the project use | abstain U-5 (pending U-23) | Greg Villa | when U-5 resolves |
 | G-10 | what licence will the engine ship under | abstain U-17 (pending U-23) | Greg Villa | when U-17 resolves |

@@ -142,13 +142,19 @@ fn a_ledger_survives_a_round_trip() {
 #[test]
 fn record_time_travel_survives_a_reload() {
     let scratch = Scratch::new("timetravel");
-    let (promoted, before) = {
+    // Explicit record-times, not the wall clock: `state_of_at(t)` includes
+    // verdicts recorded *at* t, so a promote landing in the same tick as the
+    // probe would make this flaky rather than wrong.
+    let claim_at = Timestamp::from_second(1_700_000_000).unwrap();
+    let before = Timestamp::from_second(1_700_000_100).unwrap();
+    let promote_at = Timestamp::from_second(1_700_000_200).unwrap();
+    let promoted = {
         let mut opened = Ledger::open(scratch.path()).unwrap();
         let subject = opened.ledger.add_entity("process", "p").unwrap();
-        let claim = opened.ledger.append(claim(subject, "a claim", Author::human("G"))).unwrap();
-        let before = Timestamp::now();
-        opened.ledger.append(promote(claim)).unwrap();
-        (claim, before)
+        let claim =
+            opened.ledger.append_at(claim(subject, "a claim", Author::human("G")), claim_at).unwrap();
+        opened.ledger.append_at(promote(claim), promote_at).unwrap();
+        claim
     };
     let reopened = Ledger::open(scratch.path()).unwrap();
     assert_eq!(

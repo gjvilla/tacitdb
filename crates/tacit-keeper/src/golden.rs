@@ -13,7 +13,8 @@
 
 use crate::parse::ParseError;
 use tacit_core::{
-    Content, Ledger, Outcome, Projection, Query, Retrieved, TextIndex, ViewSpec,
+    Content, Embedder, Ledger, Outcome, Projection, Query, Retrieved, TextIndex, VectorIndex,
+    ViewSpec,
 };
 
 /// How far down the results an expected answer may appear and still count as
@@ -231,14 +232,30 @@ fn parse_expectation(
     Ok((expectation, pending))
 }
 
-/// Run every question against the record and grade it.
+/// Run every question against the record and grade it, lexical only.
 pub fn run(
     ledger: &Ledger,
     projection: &Projection,
     index: &TextIndex,
     questions: &[GoldenQuestion],
 ) -> Scorecard {
+    run_with(ledger, projection, index, None, questions)
+}
+
+/// Grade with vector candidates in the plan as well, so the suite can measure
+/// what the second ranker actually changed rather than anyone asserting it.
+pub fn run_with(
+    ledger: &Ledger,
+    projection: &Projection,
+    index: &TextIndex,
+    vectors: Option<(&VectorIndex, &dyn Embedder)>,
+    questions: &[GoldenQuestion],
+) -> Scorecard {
     let retriever = index.retriever(ledger, projection, ViewSpec::now());
+    let retriever = match vectors {
+        Some((index, embedder)) => retriever.with_vectors(index, embedder),
+        None => retriever,
+    };
     let graded = questions
         .iter()
         .map(|question| {
@@ -315,12 +332,37 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    fn corpus() -> (Ledger, Projection, TextIndex) {
+    /// Grade the engine as it is actually configured — the retrieval plan the
+    /// MCP host serves, vector candidates included. Grading a different plan
+    /// than the one that ships would make the instrument measure nothing.
+    struct Configured {
+        ledger: Ledger,
+        projection: Projection,
+        index: TextIndex,
+        vectors: tacit_core::VectorIndex,
+        embedder: tacit_core::HashingEmbedder,
+    }
+
+    impl Configured {
+        fn score(&self, questions: &[GoldenQuestion]) -> Scorecard {
+            run_with(
+                &self.ledger,
+                &self.projection,
+                &self.index,
+                Some((&self.vectors, &self.embedder as &dyn Embedder)),
+                questions,
+            )
+        }
+    }
+
+    fn corpus() -> Configured {
         let mut ledger = Ledger::new();
         ingest_corpus(&mut ledger, &repo_root()).expect("corpus loads");
         let projection = Projection::rebuild(&ledger);
         let index = TextIndex::rebuild(&ledger);
-        (ledger, projection, index)
+        let embedder = tacit_core::HashingEmbedder::default();
+        let vectors = tacit_core::VectorIndex::rebuild(&ledger, &embedder);
+        Configured { ledger, projection, index, vectors, embedder }
     }
 
     fn suite() -> Vec<GoldenQuestion> {
@@ -383,8 +425,7 @@ mod tests {
     /// The build gate: a failure nothing predicted turns the suite red.
     #[test]
     fn the_suite_has_no_regressions() {
-        let (ledger, projection, index) = corpus();
-        let card = run(&ledger, &projection, &index, &suite());
+        let card = corpus().score(&suite());
         let regressions: Vec<String> = card
             .regressions()
             .iter()
@@ -397,8 +438,7 @@ mod tests {
     /// system that answers everything.
     #[test]
     fn declining_to_answer_earns_a_pass() {
-        let (ledger, projection, index) = corpus();
-        let card = run(&ledger, &projection, &index, &suite());
+        let card = corpus().score(&suite());
         assert!(card.abstentions_rewarded() >= 3);
         assert!(card.abstentions_rewarded() <= card.passed());
     }
@@ -407,7 +447,7 @@ mod tests {
     /// confidently where it should have declined.
     #[test]
     fn a_bluff_is_caught() {
-        let (ledger, projection, index) = corpus();
+        let configured = corpus();
         let trap = GoldenQuestion {
             id: "T-01".into(),
             // The record settles this — expecting an abstention is wrong, and
@@ -418,7 +458,7 @@ mod tests {
             review_trigger: "never".into(),
             pending: None,
         };
-        let card = run(&ledger, &projection, &index, &[trap]);
+        let card = configured.score(&[trap]);
         assert_eq!(card.graded[0].verdict, Verdict::Bluffed);
         assert_eq!(card.passed(), 0);
         assert_eq!(card.regressions().len(), 1);
@@ -430,7 +470,7 @@ mod tests {
     /// right record was actually surfaced.
     #[test]
     fn a_missed_answer_is_classified_by_what_went_wrong() {
-        let (ledger, projection, index) = corpus();
+        let configured = corpus();
         let unanswerable = GoldenQuestion {
             id: "T-02".into(),
             question: "what colour is the logo".into(),
@@ -439,7 +479,7 @@ mod tests {
             review_trigger: "never".into(),
             pending: None,
         };
-        let card = run(&ledger, &projection, &index, &[unanswerable]);
+        let card = configured.score(&[unanswerable]);
         assert_eq!(card.graded[0].verdict, Verdict::Missed);
         assert_eq!(card.graded[0].verdict.owner(), "retrieval: recall");
     }

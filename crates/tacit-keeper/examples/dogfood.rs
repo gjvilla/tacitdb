@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tacit_core::{
-    Author, ClaimContent, Content, CostSpec, CostTransform, MeasurementTarget, Ledger,
-    MissingCost, Projection, Query, RecordState, StateFilter, TextIndex, Via, ViewSpec,
+    Author, ClaimContent, Content, CostSpec, CostTransform, Embedder, HashingEmbedder, Ledger,
+    MeasurementTarget, MissingCost, Projection, Query, RecordState, StateFilter, TextIndex,
+    VectorIndex, Via, ViewSpec,
 };
 use tacit_keeper::corpus::{DECISION_KIND, ingest_corpus};
 
@@ -96,8 +97,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     rule("RETRIEVAL — one plan: filter, rank, expand, abstain");
     let index = TextIndex::rebuild(&ledger);
     let projection_for_search = Projection::rebuild(&ledger);
-    let retriever = index.retriever(&ledger, &projection_for_search, ViewSpec::now());
-    println!("  {} indexed records (verdicts contribute nothing)", index.documents());
+    let embedder = HashingEmbedder::default();
+    let vectors = VectorIndex::rebuild(&ledger, &embedder);
+    let retriever = index
+        .retriever(&ledger, &projection_for_search, ViewSpec::now())
+        .with_vectors(&vectors, &embedder);
+    println!(
+        "  {} indexed records (verdicts contribute nothing), {} vectors from {}",
+        index.documents(),
+        vectors.len(),
+        embedder.model_id()
+    );
 
     for question in [
         "why is the runtime embedded rather than a server",
@@ -111,6 +121,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let label = anchor_label(&ledger, item.record);
             let via = match &item.via {
                 Via::Lexical => "lexical".to_string(),
+                Via::Vector => "vector".to_string(),
+                Via::Hybrid => "lexical+vector".to_string(),
                 Via::Expanded { path, .. } => format!("expanded {} hop(s)", path.len()),
             };
             println!("    -> {label} (relevance {:.2}, {via})", item.relevance);
@@ -127,16 +139,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "\n  What to read here is the tags, not the ranking. `matches` means the record\n  \
          covers the question; `weak_matches` means the best hit did not, and\n  \
-         `is_abstention()` reports it — the results come back labelled rather than\n  \
-         dressed as answers. `registered_gap` means the engine also raised an open\n  \
-         question whose territory the query meets: an honest \"nobody has decided\n  \
-         yet\", with a citation, standing beside whatever else was found.\n\n  \
-         Honest limitations, both registered rather than papered over. Ranking is\n  \
-         lexical only (U-23): it separates covered from uncovered reliably, but it\n  \
-         cannot tell that \"storage engine\" and \"Storage layer: build vs embed\" are\n  \
-         one question — that is what the fusion stage is for. And the corpus is\n  \
-         self-referential, so a register entry *about* retrieval ranks well on\n  \
-         queries about retrieval. Both are visible above if you look."
+         `is_abstention()` reports it. `registered_gap` means the engine also raised\n  \
+         an open question whose territory the query meets — an honest \"nobody has\n  \
+         decided yet\", with a citation, beside whatever else was found.\n\n  \
+         Two rankers feed one plan now: `lexical+vector` means both found it. The\n  \
+         vector half buys robustness to spelling and morphology, not meaning — its\n  \
+         similarity was measured to overlap between answerable and unanswerable\n  \
+         questions, so it is allowed to raise a question and never to assert an\n  \
+         answer (D-0020). The golden suite is what says whether any of this helps:\n  \
+         cargo run -p tacit-keeper --example golden."
     );
 
     rule("RECORD-TIME TRAVEL — bitemporality over the real corpus");
@@ -331,8 +342,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  record's boundary\": docs/GOLDEN.md, run with");
     println!("    cargo run -p tacit-keeper --example golden");
     println!("  It scores abstention as a pass and names the room each failure came from.");
-    println!("  Today: 10/14, four of those passes earned by declining to answer, and");
-    println!("  four known shortfalls tracked against U-23 rather than hidden.");
+    println!("  Today: 11/14, four of those passes earned by declining to answer, and");
+    println!("  three known shortfalls tracked against U-23 rather than hidden.");
     println!();
     println!("  Scored honestly: (a) durable and re-validated, with the document still");
     println!("  upstream; (b) capability met; (c) instrument exists and reports honestly.");

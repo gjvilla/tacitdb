@@ -3,7 +3,7 @@
 
 use jiff::Timestamp;
 use serde::Serialize;
-use tacit_core::{Ledger, Projection, TextIndex};
+use tacit_core::{HashingEmbedder, Ledger, Projection, TextIndex, VectorIndex};
 
 /// Bounded so a long-running host cannot grow without limit; the oldest
 /// entries fall off rather than being silently discarded on write.
@@ -21,6 +21,8 @@ pub struct Store {
     pub ledger: Ledger,
     pub projection: Projection,
     pub index: TextIndex,
+    pub vectors: VectorIndex,
+    pub embedder: HashingEmbedder,
     audit: Vec<AuditEntry>,
     dropped: usize,
 }
@@ -29,7 +31,9 @@ impl Store {
     pub fn new(ledger: Ledger) -> Self {
         let projection = Projection::rebuild(&ledger);
         let index = TextIndex::rebuild(&ledger);
-        Self { ledger, projection, index, audit: Vec::new(), dropped: 0 }
+        let embedder = HashingEmbedder::default();
+        let vectors = VectorIndex::rebuild(&ledger, &embedder);
+        Self { ledger, projection, index, vectors, embedder, audit: Vec::new(), dropped: 0 }
     }
 
     /// Bring the derived indexes level with the log. Called after every write,
@@ -38,6 +42,7 @@ impl Store {
     pub fn refresh(&mut self) {
         self.projection.advance(&self.ledger);
         self.index.advance(&self.ledger);
+        self.vectors.advance(&self.ledger, &self.embedder);
     }
 
     pub fn record_call(&mut self, tool: &str, detail: impl Into<String>, outcome: impl Into<String>) {

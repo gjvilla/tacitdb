@@ -8,9 +8,9 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use tacit_core::{Ledger, Projection, TextIndex};
+use tacit_core::{HashingEmbedder, Ledger, Projection, TextIndex, VectorIndex};
 use tacit_keeper::corpus::ingest_corpus;
-use tacit_keeper::golden::{Verdict, parse_golden, run};
+use tacit_keeper::golden::{Scorecard, Verdict, parse_golden, run_with};
 
 fn main() -> ExitCode {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -36,7 +36,19 @@ fn main() -> ExitCode {
 
     let projection = Projection::rebuild(&ledger);
     let index = TextIndex::rebuild(&ledger);
-    let card = run(&ledger, &projection, &index, &questions);
+    let embedder = HashingEmbedder::default();
+    let vectors = VectorIndex::rebuild(&ledger, &embedder);
+
+    // Both plans, so the second ranker's effect is measured rather than
+    // asserted.
+    let lexical_only = run_with(&ledger, &projection, &index, None, &questions);
+    let card = run_with(
+        &ledger,
+        &projection,
+        &index,
+        Some((&vectors, &embedder as &dyn tacit_core::Embedder)),
+        &questions,
+    );
 
     println!("\n\x1b[1mGOLDEN SUITE\x1b[0m");
     println!("{}", "─".repeat(64));
@@ -113,12 +125,55 @@ fn main() -> ExitCode {
             .count()
     );
 
+    compare(&lexical_only, &card, &vectors, &embedder);
+
     if card.regressions().is_empty() {
         println!();
         ExitCode::SUCCESS
     } else {
         println!("\n  {} regression(s) — the suite is red.\n", card.regressions().len());
         ExitCode::FAILURE
+    }
+}
+
+/// What the second ranker changed, question by question.
+fn compare(
+    lexical: &Scorecard,
+    hybrid: &Scorecard,
+    vectors: &VectorIndex,
+    embedder: &HashingEmbedder,
+) {
+    use tacit_core::Embedder as _;
+    println!("\n\x1b[1mWHAT VECTOR CANDIDATES CHANGED\x1b[0m");
+    println!("{}", "─".repeat(64));
+    println!(
+        "  {} vectors, model {} ({} dimensions)",
+        vectors.len(),
+        embedder.model_id(),
+        embedder.dimensions()
+    );
+    println!(
+        "  lexical only: {}/{} passed   with vectors: {}/{} passed",
+        lexical.passed(),
+        lexical.graded.len(),
+        hybrid.passed(),
+        hybrid.graded.len()
+    );
+    let mut moved = 0;
+    for (before, after) in lexical.graded.iter().zip(&hybrid.graded) {
+        if before.verdict != after.verdict {
+            moved += 1;
+            println!(
+                "    {} {:<15} -> {:<15} {}",
+                before.question.id,
+                before.verdict.label(),
+                after.verdict.label(),
+                truncate(&before.question.question, 40)
+            );
+        }
+    }
+    if moved == 0 {
+        println!("    nothing moved.");
     }
 }
 

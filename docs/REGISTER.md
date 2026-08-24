@@ -89,9 +89,11 @@ the decision — because an unregistered gap is how systems bluff.
 | U-19 | Ingest idempotency: re-running into a non-fresh ledger duplicates the corpus | Before any durable store exists (interacts with U-5, U-12) | Today's honest answer is "ingest into a fresh ledger", printed loudly rather than silently handled. Content-addressing (U-12) is the likely real answer. |
 | U-20 | Set verdicts vs the transcription cost: the corpus needed two verdicts per record for what a person performed as one editorial act | With U-16 | Concrete evidence for U-16 produced by the first real ingest, not speculation. |
 | U-21 | Relation-scope contradictions never surface (invariant 7 covers attributes only) | With U-15 | Raised by adversarial review 2026-08-23 and confirmed as real-but-deliberate: the engine cannot know a predicate's cardinality. Kept visible so it is a decision, not an oversight. |
-| U-23 | Retrieval quality is lexical only: BM25 separates covered from uncovered but cannot see that "storage engine" and "storage layer" are one question. The query-side stopword list is an English crutch that document frequency cannot replace on a small technical corpus — there, function words are *rare*, so IDF rewards them | Before the golden suite (H-0001c), and before any claim that retrieval is good | The fusion stage exists so vector candidates join the same plan (R-2). Shape, filters, outcome tags and abstention are settled and tested; only the candidate source is thin. **Measured 2026-08-23:** the golden suite scores 10/14 with 4 shortfalls, all this cause — two under-confident (right record at rank 1, declined to call it a match), one bluff, one spelling variance ("licence" vs "license"). That last is close to the shortest possible demonstration of the limit. |
+| U-23 | Retrieval quality: the lexical ranker separates covered from uncovered reliably, but matches words rather than meaning, so two phrasings of one question do not meet. The query-side stopword list is an English crutch that document frequency cannot replace on a small technical corpus — there, function words are *rare*, so IDF rewards them | Before any claim that retrieval is good | **Narrowed 2026-08-23 (D-0020):** the plumbing is done — `Embedder` trait, `VectorIndex`, two rankers through the fusion stage. What remains is a model. The built-in hashing embedder buys robustness to spelling and morphology and one golden question, and cannot buy meaning. **Measured:** its top-hit similarity spans 0.49–0.66 on answerable questions and 0.47–0.60 on unanswerable ones — overlapping, so vector similarity cannot confer confidence here, only raise an offer. Note also that this row is itself part of the corpus: an entry that quotes the phrasing of a test question will rank for it, which is why this one no longer does. |
 | U-24 | Snapshots and compaction: replay is O(log) on every open, and the log only grows | When open time or log size becomes uncomfortable | The accepted cost of D-0019. A snapshot must itself be replay-validated or it reintroduces the bypass it exists to avoid — that is the design constraint, not the file format. |
 | U-25 | `sync_data` per append is correct but slow for bulk ingest | When a bulk corpus makes ingest time uncomfortable | Batching needs a durability story for the batch boundary: what a caller is promised when a batch is half-written. Interacts with U-16's set verdicts. |
+| U-26 | Approximate nearest neighbours: vector search is an exact scan over admitted records | When the corpus makes the scan cost measurable | Exact search is correct and fast at this scale, and it pre-filters rather than post-filters, so it satisfies R-1's semantics. The performance half awaits an index — HNSW with predicate-aware traversal is the shape the priors point at (NaviX, MIT). |
+| U-27 | Corpus self-reference distorts its own measurement: a record describing a retrieval failure matches the queries that fail | Whenever the golden suite or the register is edited | Found the hard way — U-23 quoted a golden question's exact phrasing and then outranked the record that question was about. Not fixable in the engine; it is a curation discipline. Worth a note in GOLDEN.md and a check when adding questions. |
 | U-22 | A backwards system-clock step makes every `append` fail with no recovery path | Before durable storage (U-5) | The monotonicity guard that makes `state_of_at` sound has no escape hatch. Confirmed by review; deferred because the alternative (accepting backwards time) breaks bitemporal reads, and the real fix belongs with the storage layer's clock story. |
 
 ## Room 3 · Unknown knowns
@@ -130,9 +132,13 @@ that convert surprises into registered entries while they are cheap:
   in place.
 - **Golden suite that rewards abstention** (H-0001c). A fluent wrong answer from the
   system is a drift alarm, not just a bug.
-- **Pre-publication scrub pass.** Before the repo goes public: verify the D-0010
-  boundary holds everywhere (no employer identifiers, no private-path references
-  that leak context), and U-6/U-7 are resolved.
+- **Pre-publication scrub pass.** Before the repo goes public: run
+  `scripts/check-boundary.sh` — the D-0010 boundary as an executable rule
+  rather than a remembered one — then check for private-path references that
+  leak context, and confirm U-6 and U-7 are resolved. The script matches one
+  name case-sensitively because it collides with an ordinary English word.
+  That nuance exists because the naive rule cried wolf four times in a single
+  day, and an alarm nobody reads is worse than no alarm at all.
 
 ---
 

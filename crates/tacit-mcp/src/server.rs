@@ -72,8 +72,9 @@ pub struct SearchOutput {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct SearchItem {
     pub relevance: f64,
-    /// `lexical` for a direct match, or `expanded` for context reached by
-    /// traversal, which carries the edges that justified its inclusion.
+    /// How this was found: `lexical` for a word match, `vector` for one
+    /// reached by similarity alone, `lexical+vector` for both, or `expanded`
+    /// for context reached by traversal.
     pub via: String,
     #[serde(flatten)]
     pub record: RecordOut,
@@ -210,7 +211,10 @@ impl TacitServer {
         }
 
         let output = {
-            let retriever = store.index.retriever(&store.ledger, &store.projection, spec);
+            let retriever = store
+                .index
+                .retriever(&store.ledger, &store.projection, spec)
+                .with_vectors(&store.vectors, &store.embedder);
             let found = retriever.retrieve(&query);
             SearchOutput {
                 tags: found.tags().iter().map(|t| t.to_string()).collect(),
@@ -222,6 +226,8 @@ impl TacitServer {
                         relevance: (item.relevance * 100.0).round() / 100.0,
                         via: match &item.via {
                             tacit_core::Via::Lexical => "lexical".to_string(),
+                            tacit_core::Via::Vector => "vector".to_string(),
+                            tacit_core::Via::Hybrid => "lexical+vector".to_string(),
                             tacit_core::Via::Expanded { path, .. } => {
                                 format!("expanded ({} edge(s))", path.len())
                             }
