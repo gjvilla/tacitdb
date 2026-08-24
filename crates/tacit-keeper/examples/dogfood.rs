@@ -305,6 +305,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
          rather than inventing an answer or returning nothing."
     );
 
+    rule("WHAT BACKS EACH PROMOTION");
+    let promoted = ledger.promoted_claims().count();
+    let resting_on_nothing = tacit_keeper::attest::unattested_promotions(&ledger);
+    println!("  Every promoted claim here reached promoted through a verdict this ingest");
+    println!("  transcribed from `state: promoted` in a markdown file. So the honest");
+    println!("  question is not whether a person declared it — the engine enforces that —");
+    println!("  but how the keeper knows a person wrote the file (U-29, D-0025).");
+    println!();
+    println!("  promoted claims                        {promoted}");
+    println!("  resting on a verdict backed by nothing {}", resting_on_nothing.len());
+    for (id, why) in resting_on_nothing.iter().take(3) {
+        println!("    · {id} — {why}");
+    }
+    if let Some(sample) = ledger
+        .promoted_claims()
+        .find_map(|c| ledger.history(c.id()).first().copied())
+        .and_then(|v| v.envelope().author().detail.clone())
+    {
+        println!("  a verdict's own account of itself:");
+        println!("    {sample}");
+    }
+    println!();
+    println!("  Run the host with --require-signature and a promotion no signed commit");
+    println!("  carries is not transcribed at all: the claim stays proposed, waiting for");
+    println!("  a person, which is where an unbacked promotion always belonged.");
+    println!();
+
     rule("KEEPER WORK QUEUE");
     let queue = ledger.review_queue(jiff::Timestamp::now());
     println!("  due for review        {}", queue.due.len());

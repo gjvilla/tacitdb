@@ -24,6 +24,8 @@ pub struct ParsedUnknown {
     pub resolved: Option<Resolution>,
     /// The row exactly as written, so a re-ingest can tell whether it changed.
     pub raw: String,
+    /// Which line of the register the row sits on, 1-based (D-0025).
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +51,7 @@ impl ParsedUnknown {
 pub fn parse_register(text: &str) -> Result<Vec<ParsedUnknown>, ParseError> {
     let mut unknowns: Vec<ParsedUnknown> = Vec::new();
 
-    for line in text.lines() {
+    for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if !trimmed.starts_with("| U-") {
             continue;
@@ -88,6 +90,7 @@ pub fn parse_register(text: &str) -> Result<Vec<ParsedUnknown>, ParseError> {
             notes: cells[3].to_string(),
             resolved,
             raw: trimmed.to_string(),
+            line: index + 1,
         });
     }
     Ok(unknowns)

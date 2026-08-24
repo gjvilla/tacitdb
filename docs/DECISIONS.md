@@ -842,6 +842,68 @@ replaced before anyone read it never did.
 
 ---
 
+## D-0025 · A verdict transcribed from prose says who wrote the prose
+
+```yaml
+id: D-0025
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: keeper round — narrows U-29
+evidence: [design/001-data-model.md, docs/REGISTER.md]
+review_trigger: when a second person edits the corpus, when an agent is given
+  write access to it, or when the keeper needs a real identity registry
+```
+
+**Assertion.** Every verdict the ingest transcribes from a document carries what
+git can establish about who put those words there, written into the verdict's
+own `Author.detail` and therefore into the permanent record. A policy chooses
+what to do with that: `Observe` records it and carries on; `RequireSignature`
+declines to transcribe a verdict whose text no signed commit carries, leaving
+the claim proposed.
+
+**Forces.** Invariant 5 says the engine enforces the declaration and the keeper
+authenticates it (D-0012). The keeper did not authenticate anything. It read
+`state: promoted` out of prose and asserted that the named person had declared
+a promotion — so write access to `docs/DECISIONS.md` was promotion authority,
+in a system whose MCP surface deliberately has no promote tool at all. D-0021
+made that live by making re-ingest routine.
+
+**What git can attest is the editor, not the decider.** A person may record a
+decision someone else made, so the document's `author:` is whoever decided and
+the commit's author is whoever typed. Requiring them to match would break the
+ordinary case. The typist is the one worth attesting anyway, because the typist
+is who the threat is about.
+
+**The weakest line governs the record.** A record's current text may come from
+several commits, and the question is whether anything untrusted could have been
+slipped into it — so one unsigned line makes the whole record unsigned, however
+well attested the lines around it. Those words did get there unsigned.
+
+**Written into the record, not merely checked at the door.** A check that gates
+and leaves no trace cannot answer the question afterwards. Because the
+attestation is envelope data it replays through the grammar with everything
+else, and `unattested_promotions` can ask, at any later time, which promoted
+claims rest on nothing — including ones transcribed before any policy existed,
+and ones that will stay unattested forever because they were made while the
+document was still a draft. **The policy governs new transcriptions, never old
+ones**, which is why the read matters more than the gate.
+
+**The default observes rather than obstructs.** A working tree mid-edit is the
+normal state of a document its author is writing, and refusing to ingest over
+uncommitted work would make the strict setting the only usable one and then get
+switched off. `RequireSignature` is for the case the register named: a corpus
+something other than a person can write to.
+
+**What this does not do.** It does not establish that the signer intended the
+promotion — an agent running on an unlocked machine can sign as its owner, and
+no signing scheme survives a compromised endpoint. It does not know which keys
+the project trusts; git's own verdict is taken as given. Both are identity
+questions, which is the keeper's to answer and still unanswered (U-31).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

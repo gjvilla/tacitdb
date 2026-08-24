@@ -23,6 +23,12 @@ pub struct RecordOut {
     pub text: String,
     pub author: String,
     pub author_kind: String,
+    /// How the author is known. On a verdict transcribed from a document, what
+    /// git could establish about who wrote the words asserting it — so an agent
+    /// reading this can tell a promotion backed by a signed commit from one
+    /// backed by nothing (U-29).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_known_by: Option<String>,
     pub source_channel: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_reference: Option<String>,
@@ -57,6 +63,7 @@ impl RecordOut {
             text: indexable_text(record).unwrap_or_default(),
             author: envelope.author().name.clone(),
             author_kind: format!("{:?}", envelope.author().kind).to_lowercase(),
+            author_known_by: envelope.author().detail.clone(),
             source_channel: envelope.source().channel.clone(),
             source_reference: envelope.source().reference.clone(),
             valid_from: envelope.valid_from().to_string(),

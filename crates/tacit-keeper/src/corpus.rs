@@ -47,6 +47,7 @@
 //! never superseded. It stays exactly what it always was — an unratified machine
 //! proposal — and shows up where those belong, in the pending queue.
 
+use crate::attest::{Attestation, Blame, blame};
 use crate::origin::{Origin, digest};
 use crate::parse::{ParseError, ParsedRecord, mentioned_ids, parse_corpus, split_evidence};
 use crate::register::{ParsedUnknown, parse_register, register_owner};
@@ -55,7 +56,7 @@ use jiff::tz::TimeZone;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tacit_core::{
-    Author, ClaimContent, ClaimState, Content, Draft, EntityId, Evidence, GapContent, GapState,
+    Author, AuthorKind, ClaimContent, ClaimState, Content, Draft, EntityId, Evidence, GapContent, GapState,
     HypothesisContent, HypothesisState, Ledger, RecordId, RecordState, ReviewTrigger, SourceRef,
     VerdictAction, VerdictContent, WithdrawReason,
 };
@@ -108,6 +109,77 @@ pub enum IngestError {
 
     #[error("the register does not state an owner, so its gaps have no author")]
     MissingRegisterOwner,
+}
+
+/// How much a transcribed verdict must be able to show for itself.
+///
+/// The ingest reads `state: promoted` out of prose and asserts that a person
+/// declared it. `Observe` records what git can establish about who put those
+/// words there and carries on, which is right for a document its author is
+/// still editing. `RequireSignature` declines to transcribe a verdict whose
+/// text no signed commit carries — for a corpus something other than a person
+/// can write to (U-29).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Attest {
+    #[default]
+    Observe,
+    RequireSignature,
+}
+
+/// What can be established about who wrote each corpus document, and how much
+/// this run insists on.
+pub struct Attestations {
+    decisions: Blame,
+    register: Blame,
+    policy: Attest,
+}
+
+impl Attestations {
+    /// Ask git about both documents beneath a repository root.
+    pub fn of_repo(repo_root: &Path, policy: Attest) -> Self {
+        Self {
+            decisions: blame(repo_root, DECISIONS_DOC),
+            register: blame(repo_root, REGISTER_DOC),
+            policy,
+        }
+    }
+
+    /// For a corpus supplied as text: there is no file, so there is nobody to
+    /// ask. Stated as a reason rather than left blank, because "we did not
+    /// check" and "we checked and found nothing" read the same in a record and
+    /// mean different things.
+    pub fn none(policy: Attest) -> Self {
+        let because = "the corpus was supplied as text, not as a file under version control";
+        Self { decisions: Blame::unattested(because), register: Blame::unattested(because), policy }
+    }
+
+    fn decisions(&self, lines: (usize, usize)) -> Attestation {
+        self.decisions.over(lines)
+    }
+
+    fn register(&self, line: usize) -> Attestation {
+        self.register.over((line, line))
+    }
+
+    /// Whether a verdict resting on this attestation may be transcribed.
+    fn admits(&self, attestation: &Attestation) -> bool {
+        self.policy == Attest::Observe || attestation.is_signed()
+    }
+}
+
+/// The author a transcribed verdict is attributed to: the person the document
+/// names, plus what could be established about who put those words there.
+///
+/// Two different people, deliberately. The document's `author:` is whoever made
+/// the decision; the attestation is whoever typed it. Requiring them to match
+/// would break the ordinary case of one person recording another's decision —
+/// and the typist is the one the threat is about anyway.
+fn transcriber(name: &str, attestation: &Attestation) -> Author {
+    Author {
+        name: name.to_string(),
+        kind: AuthorKind::Human,
+        detail: Some(attestation.to_string()),
+    }
 }
 
 /// Whether a source record was new to the ledger, unchanged since the last
@@ -210,6 +282,13 @@ pub struct IngestReport {
     /// only from agent proposals looks the same and is harmless, which is why
     /// this is a report and not an error.
     pub unreadable_provenance: bool,
+    /// Verdicts the document asserts that this run declined to transcribe,
+    /// because no signed commit carries the words asserting them, with the
+    /// attestation that fell short.
+    pub withheld: Vec<(String, String)>,
+    /// Verdicts transcribed with nothing established about who wrote them.
+    /// Recorded in the verdict itself as well, so it stays answerable later.
+    pub unattested: Vec<String>,
     /// Records actually written this run.
     written: usize,
 }
@@ -240,6 +319,7 @@ impl IngestReport {
         self.written == 0
             && self.drifted.is_empty()
             && self.refused.is_empty()
+            && self.withheld.is_empty()
             && !self.unreadable_provenance
     }
 
@@ -270,8 +350,9 @@ pub fn ingest_decisions(
     ledger: &mut Ledger,
     repo_root: &Path,
 ) -> Result<IngestReport, IngestError> {
-    let decisions = read_doc(repo_root, "docs/DECISIONS.md")?;
-    ingest_text(ledger, &decisions, None, repo_root)
+    let decisions = read_doc(repo_root, DECISIONS_DOC)?;
+    let attest = Attestations::of_repo(repo_root, Attest::default());
+    ingest_text_with(ledger, &decisions, None, repo_root, &attest)
 }
 
 /// Ingest both founding documents: the decision records and the register's
@@ -282,9 +363,19 @@ pub fn ingest_corpus(
     ledger: &mut Ledger,
     repo_root: &Path,
 ) -> Result<IngestReport, IngestError> {
-    let decisions = read_doc(repo_root, "docs/DECISIONS.md")?;
-    let register = read_doc(repo_root, "docs/REGISTER.md")?;
-    ingest_text(ledger, &decisions, Some(&register), repo_root)
+    ingest_corpus_with(ledger, repo_root, Attest::default())
+}
+
+/// Ingest both documents, insisting on as much as `policy` asks for.
+pub fn ingest_corpus_with(
+    ledger: &mut Ledger,
+    repo_root: &Path,
+    policy: Attest,
+) -> Result<IngestReport, IngestError> {
+    let decisions = read_doc(repo_root, DECISIONS_DOC)?;
+    let register = read_doc(repo_root, REGISTER_DOC)?;
+    let attest = Attestations::of_repo(repo_root, policy);
+    ingest_text_with(ledger, &decisions, Some(&register), repo_root, &attest)
 }
 
 fn read_doc(repo_root: &Path, relative: &str) -> Result<String, IngestError> {
@@ -297,6 +388,16 @@ pub fn ingest_text(
     text: &str,
     register_text: Option<&str>,
     repo_root: &Path,
+) -> Result<IngestReport, IngestError> {
+    ingest_text_with(ledger, text, register_text, repo_root, &Attestations::none(Attest::default()))
+}
+
+pub fn ingest_text_with(
+    ledger: &mut Ledger,
+    text: &str,
+    register_text: Option<&str>,
+    repo_root: &Path,
+    attest: &Attestations,
 ) -> Result<IngestReport, IngestError> {
     let parsed = parse_corpus(text)?;
     let unknowns = match register_text {
@@ -362,9 +463,12 @@ pub fn ingest_text(
             continue;
         }
         ingest_one(ledger, record, &origin, &prior, repo_root, &mut seen, &mut retiring, &mut report)?;
-        if let Some(old) = abandoning {
+        if let Some(old) = abandoning
+            && let attestation = attest.decisions(record.lines)
+            && attest.admits(&attestation)
+        {
             let verdict = ledger.append(Draft::new(
-                Author::human(record.require("author")?),
+                transcriber(record.require("author")?, &attestation),
                 SourceRef {
                     channel: "corpus-ingest".into(),
                     reference: Some(format!("{DECISIONS_DOC} {} reworded", record.id)),
@@ -408,8 +512,9 @@ pub fn ingest_text(
                 // promotion to fold the retirement into, the way a claim has.
                 (Disposition::Changed, Some(old)) => {
                     ingest_gap(ledger, unknown, &origin, Some(old), author, &mut report)?;
+                    let attestation = attest.register(unknown.line);
                     let verdict = ledger.append(Draft::new(
-                        author.clone(),
+                        transcriber(&author.name, &attestation),
                         SourceRef {
                             channel: "register".into(),
                             reference: Some(format!("{REGISTER_DOC} {} reworded", unknown.id)),
@@ -445,7 +550,11 @@ pub fn ingest_text(
     // Phase 3 — transcribe the verdicts the decision document records.
     for record in &parsed {
         let state = record.require("state")?;
-        let author = Author::human(record.require("author")?);
+        // Who put these words in the document, as far as git can say. The
+        // promotion about to be transcribed is for the record as it now reads,
+        // so what is attested is the whole of the record's current text.
+        let attestation = attest.decisions(record.lines);
+        let author = transcriber(record.require("author")?, &attestation);
         match state {
             "promoted" => {
                 let targets = [
@@ -456,6 +565,21 @@ pub fn ingest_text(
                         .find(|(k, _)| *k == record.id)
                         .map(|(_, r)| *r),
                 ];
+                if !attest.admits(&attestation)
+                    && targets.iter().flatten().any(|t| {
+                        ledger.state_of(*t) == Some(RecordState::Claim(ClaimState::Proposed))
+                    })
+                {
+                    // The document asserts a promotion and nothing signed
+                    // carries the words asserting it. Declining leaves the
+                    // claim proposed, which is the safe direction to fail: the
+                    // record still loads, and nobody was promoted by prose.
+                    report.withheld.push((record.id.clone(), attestation.to_string()));
+                    continue;
+                }
+                if matches!(attestation, Attestation::None { .. }) {
+                    report.unattested.push(record.id.clone());
+                }
                 for target in targets.into_iter().flatten() {
                     // On a sync most targets are already promoted by an earlier
                     // run's transcription of the same line. Re-declaring a
@@ -526,6 +650,16 @@ pub fn ingest_text(
             if ledger.state_of(gap) != Some(RecordState::Gap(tacit_core::GapState::Registered)) {
                 continue;
             }
+            // Marking a question resolved is a verdict too, and the register is
+            // as editable as the decision document is.
+            let attestation = attest.register(unknown.line);
+            if !attest.admits(&attestation) {
+                report.withheld.push((unknown.id.clone(), attestation.to_string()));
+                continue;
+            }
+            if matches!(attestation, Attestation::None { .. }) {
+                report.unattested.push(unknown.id.clone());
+            }
             let settled_by = resolution.by.as_ref().and_then(|d| report.content_claim(d));
             let (action, rationale) = match (settled_by, &resolution.by) {
                 (Some(with_claim), Some(decision)) => (
@@ -552,10 +686,10 @@ pub fn ingest_text(
                 ),
             };
             let verdict = ledger.append(Draft::new(
-                author.clone(),
+                transcriber(&author.name, &attestation),
                 SourceRef {
                     channel: "corpus-ingest".into(),
-                    reference: Some(format!("docs/REGISTER.md {}", unknown.id)),
+                    reference: Some(format!("{REGISTER_DOC} {}", unknown.id)),
                 },
                 Content::Verdict(VerdictContent { action, rationale: Some(rationale) }),
             ))?;
@@ -927,6 +1061,7 @@ fn resolve_path(candidate: &str, repo_root: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attest::Attestation;
     use tacit_core::{ClaimState, Projection, RecordState, StateFilter, ViewSpec};
 
     fn repo_root() -> PathBuf {
@@ -947,6 +1082,137 @@ mod tests {
         crate::parse::parse_corpus(&text).unwrap()
     }
 
+
+    // ── U-29: a verdict transcribed from prose ──────────────────────────────
+
+    fn verdicts_of<'a>(ledger: &'a Ledger, report: &IngestReport) -> Vec<&'a tacit_core::Record> {
+        report.verdicts.iter().filter_map(|id| ledger.record(*id)).collect()
+    }
+
+    #[test]
+    fn every_transcribed_verdict_says_how_its_author_is_known() {
+        let (ledger, report) = ingested();
+        let verdicts = verdicts_of(&ledger, &report);
+        assert!(!verdicts.is_empty());
+        for verdict in verdicts {
+            let detail = verdict
+                .envelope()
+                .author()
+                .detail
+                .as_deref()
+                .expect("a transcribed verdict states what backs it");
+            // Parseability, not signedness: the working tree may well be dirty
+            // while these tests run, and "these lines are not committed" is a
+            // perfectly good thing for a record to say.
+            assert!(
+                Attestation::parse(detail).is_some(),
+                "unreadable attestation {detail:?} on {}",
+                verdict.id()
+            );
+        }
+    }
+
+    #[test]
+    fn a_corpus_supplied_as_text_promotes_and_records_that_nothing_backed_it() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        let report =
+            ingest_text(&mut ledger, &decisions_doc(&[("D-0001", "Four forces.")]), None, &root)
+                .expect("ingest");
+
+        // It still promotes — the default is to observe, not to obstruct.
+        assert_eq!(
+            ledger.state_of(report.content_claim("D-0001").unwrap()),
+            Some(RecordState::Claim(ClaimState::Promoted))
+        );
+        assert!(report.unattested.contains(&"D-0001".to_string()));
+        assert!(report.withheld.is_empty());
+        assert!(!report.quiet());
+
+        // And the record says so itself, permanently, rather than the check
+        // having happened once and left no trace.
+        let detail = verdicts_of(&ledger, &report)[0]
+            .envelope()
+            .author()
+            .detail
+            .clone()
+            .expect("detail");
+        assert!(matches!(Attestation::parse(&detail), Some(Attestation::None { .. })));
+        assert_eq!(crate::attest::unattested_promotions(&ledger).len(), 2);
+    }
+
+    /// The whole of U-29: write access to the document was promotion authority.
+    #[test]
+    fn requiring_a_signature_leaves_the_claim_proposed_rather_than_promoting_on_prose() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        let report = ingest_text_with(
+            &mut ledger,
+            &decisions_doc(&[("D-0001", "Four forces.")]),
+            None,
+            &root,
+            &Attestations::none(Attest::RequireSignature),
+        )
+        .expect("ingest");
+
+        // The record loads; nobody is promoted by prose. Failing in this
+        // direction is the point — a claim left proposed is a claim awaiting a
+        // person, which is where it should have been all along.
+        let claim = report.content_claim("D-0001").expect("the claim is still ingested");
+        assert_eq!(ledger.state_of(claim), Some(RecordState::Claim(ClaimState::Proposed)));
+        assert_eq!(report.withheld.len(), 1);
+        assert_eq!(report.withheld[0].0, "D-0001");
+        assert!(report.verdicts.is_empty());
+        assert!(crate::attest::unattested_promotions(&ledger).is_empty());
+    }
+
+    #[test]
+    fn the_register_is_as_editable_as_the_decision_document() {
+        let root = repo_root();
+        let register = "## Room 2 · Known unknowns\n\n\
+             | id | Question | Trigger | Notes |\n\
+             |----|----------|---------|-------|\n\
+             | U-1 | ~~Whether a query language is needed~~ **Resolved 2026-08-23** \
+             in conversation | — | nothing here states the answer |\n\n\
+             *Recorded 2026-08-23. Owner: Greg Villa.*\n";
+        let mut ledger = Ledger::new();
+        let report = ingest_text_with(
+            &mut ledger,
+            &decisions_doc(&[("D-0001", "Four forces.")]),
+            Some(register),
+            &root,
+            &Attestations::none(Attest::RequireSignature),
+        )
+        .expect("ingest");
+
+        // Marking a question resolved is a verdict too, and an agent that can
+        // edit one document can edit the other.
+        let gap = report.gap("U-1").expect("the gap is still registered");
+        assert_eq!(ledger.state_of(gap), Some(RecordState::Gap(GapState::Registered)));
+        assert!(report.withheld.iter().any(|(id, _)| id == "U-1"));
+    }
+
+    #[test]
+    fn an_attestation_survives_the_store() {
+        let root = repo_root();
+        let path = std::env::temp_dir().join(format!("tacit-attest-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let claim = {
+            let mut ledger = Ledger::open(&path).expect("open").ledger;
+            ingest_corpus(&mut ledger, &root).expect("ingest").content_claim("D-0001").unwrap()
+        };
+
+        // The attestation is envelope data, so it replays through the grammar
+        // with everything else — a check that left no durable trace would be
+        // no better than no check.
+        let ledger = Ledger::open(&path).expect("reopen").ledger;
+        let verdict = ledger.history(claim)[0];
+        let detail = verdict.envelope().author().detail.as_deref().expect("detail survived");
+        assert!(Attestation::parse(detail).is_some(), "got {detail:?}");
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     // ── U-19: ingest is a sync, not a load ──────────────────────────────────
 

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use store::Store;
 use tacit_core::Ledger;
-use tacit_keeper::Disposition;
+use tacit_keeper::{Attest, Disposition};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,6 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut corpus = None;
     let mut store = None;
+    let mut attest = Attest::Observe;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -30,6 +31,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 store = Some(PathBuf::from(path));
                 index += 2;
+            }
+            "--require-signature" => {
+                attest = Attest::RequireSignature;
+                index += 1;
             }
             other if other.starts_with('-') => {
                 eprintln!("tacit-mcp: unknown option {other}");
@@ -84,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // they replace, and what the ingest may not decide on its own is said out
     // loud (U-19).
     match &corpus {
-        Some(root) => match tacit_keeper::ingest_corpus(&mut ledger, root) {
+        Some(root) => match tacit_keeper::ingest_corpus_with(&mut ledger, root, attest) {
             Ok(report) => {
                 if report.unreadable_provenance {
                     eprintln!(
@@ -122,6 +127,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!(
                         "tacit-mcp:   {id} reads `state: promoted` in the document and \
                          {state} in the store — not resurrected"
+                    );
+                }
+                // The whole of U-29 in one line each: a verdict transcribed
+                // from prose is only as good as what is known about who wrote
+                // the prose.
+                for (id, attestation) in &report.withheld {
+                    eprintln!(
+                        "tacit-mcp:   {id} asserts a verdict that no signed commit carries \
+                         ({attestation}) — not transcribed; the claim stays proposed"
+                    );
+                }
+                if !report.unattested.is_empty() {
+                    eprintln!(
+                        "tacit-mcp:   {} verdict(s) transcribed with nothing established \
+                         about who wrote them: {}. Each says so in its own author detail. \
+                         Pass --require-signature to decline them instead.",
+                        report.unattested.len(),
+                        report.unattested.join(", ")
                     );
                 }
             }

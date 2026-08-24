@@ -79,6 +79,10 @@ pub struct ParsedRecord {
     pub sections: Vec<(String, String)>,
     /// The record's full text, for reference scanning.
     pub raw: String,
+    /// Where the record sits in its document: 1-based, inclusive, heading line
+    /// through last body line. Carried so the keeper can ask git who wrote it
+    /// before transcribing a person's verdict from it (D-0025).
+    pub lines: (usize, usize),
 }
 
 impl ParsedRecord {
@@ -97,21 +101,24 @@ impl ParsedRecord {
 /// Split the document into record blocks and parse each.
 pub fn parse_corpus(text: &str) -> Result<Vec<ParsedRecord>, ParseError> {
     let mut records = Vec::new();
-    let mut current: Option<(String, String, Vec<&str>)> = None;
+    let mut current: Option<(String, String, Vec<&str>, usize)> = None;
+    let mut seen = 0usize;
 
-    for line in text.lines() {
+    for (index, line) in text.lines().enumerate() {
+        let number = index + 1;
+        seen = number;
         if let Some(heading) = line.strip_prefix("## ") {
-            if let Some((id, title, body)) = current.take() {
-                records.push(parse_record(id, title, &body.join("\n"))?);
+            if let Some((id, title, body, start)) = current.take() {
+                records.push(parse_record(id, title, &body.join("\n"), (start, number - 1))?);
             }
             let (id, title) = split_heading(heading)?;
-            current = Some((id, title, Vec::new()));
-        } else if let Some((_, _, body)) = current.as_mut() {
+            current = Some((id, title, Vec::new(), number));
+        } else if let Some((_, _, body, _)) = current.as_mut() {
             body.push(line);
         }
     }
-    if let Some((id, title, body)) = current.take() {
-        records.push(parse_record(id, title, &body.join("\n"))?);
+    if let Some((id, title, body, start)) = current.take() {
+        records.push(parse_record(id, title, &body.join("\n"), (start, seen))?);
     }
     Ok(records)
 }
@@ -147,7 +154,12 @@ pub fn is_unknown_id(candidate: &str) -> bool {
         && bytes[2..].iter().all(u8::is_ascii_digit)
 }
 
-fn parse_record(id: String, title: String, body: &str) -> Result<ParsedRecord, ParseError> {
+fn parse_record(
+    id: String,
+    title: String,
+    body: &str,
+    lines: (usize, usize),
+) -> Result<ParsedRecord, ParseError> {
     let (yaml_block, prose) = split_yaml(&id, body)?;
     let YamlBlock { values: yaml, comments } = parse_yaml(&id, &yaml_block)?;
 
@@ -171,7 +183,7 @@ fn parse_record(id: String, title: String, body: &str) -> Result<ParsedRecord, P
     if !has_substance {
         return Err(ParseError::MissingAssertion { record: id });
     }
-    Ok(ParsedRecord { id, title, yaml, comments, sections, raw: body.to_string() })
+    Ok(ParsedRecord { id, title, yaml, comments, sections, raw: body.to_string(), lines })
 }
 
 fn split_yaml(id: &str, body: &str) -> Result<(String, String), ParseError> {
