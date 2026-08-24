@@ -26,12 +26,17 @@ What the project has decided and recorded, with owners and review triggers:
   verdict grammar, instrument panel, and the projected graph — with the
   invariant suite and U-10 property tests), `tacit-keeper` (corpus parser and
   the `docs/DECISIONS.md` ingest, plus the `dogfood` example),
-  `tacit-mcp` (host stub), `tacit-python` (binding shell, no PyO3 yet).
+  `tacit-mcp` (the MCP host: ten typed, audited tools over stdio, per D-0018),
+  `tacit-python` (binding shell, no PyO3 yet).
 - **The corpus ingests itself.** `cargo run -p tacit-keeper --example dogfood`
   loads this project's own decision records *and this register* into the engine
   and interrogates them: provenance with evidence chains, record-time travel,
   the projected graph, and weighted paths over the instrument panel. It prints
   its own honest position against H-0001(a).
+- **Agents can reach the record** (2026-08-23). `cargo run -p tacit-mcp -- .`
+  serves this repository's corpus over MCP. The ratchet is visible in the tool
+  surface as an absence: there is no promote tool, so no sequence of calls an
+  agent can make moves a claim to promoted. An integration test asserts that.
 - **Room 2 is in the ledger, not only in this file** (2026-08-23). Every row
   below is ingested as a gap record carrying its trigger, so the engine can
   answer "that is a registered open question" instead of "nothing found" —

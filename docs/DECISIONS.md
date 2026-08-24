@@ -495,6 +495,40 @@ split out for the same reason before it had a line of code in it.
 
 ---
 
+## D-0018 · The MCP host takes the official SDK
+
+```yaml
+id: D-0018
+state: promoted
+author: Greg Villa
+recorded: 2026-08-23
+valid_from: 2026-08-23
+source: mcp host implementation round
+evidence: [REQUIREMENTS.md R-4]
+review_trigger: if the SDK stalls upstream, or its transitive weight reaches
+  tacit-core, reopen — a hand-rolled JSON-RPC transport stays a viable fallback
+  because the tool surface is already independent of it
+```
+
+**Assertion.** `tacit-mcp` depends on `rmcp`, the official Rust MCP SDK
+(Apache-2.0), and through it on tokio. The engine does not: `tacit-core` keeps
+its four small dependencies, and the protocol lives entirely in the host crate.
+
+**Forces.** R-4's "no plugin landmines" is about *runtime*-loaded extensions
+that can be absent in production, not about compile-time dependencies; a
+statically linked crate cannot fail to be installed on the target. Against
+that, hand-rolling MCP means owning handshake, capability negotiation,
+protocol-version selection and error codes — protocol compliance is exactly
+the kind of work a reference implementation should do. D-0017's crate boundary
+is what makes the trade safe: the dependency is quarantined one crate away
+from the grammar.
+
+**Alternatives rejected.** Hand-rolled JSON-RPC over stdio (compliance risk for
+no benefit the project can bank); an HTTP server (D-0015 already settled that the
+host is a host, not a database server).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

@@ -1,0 +1,263 @@
+//! End-to-end tests against the real binary over stdio. These spawn the host
+//! and speak MCP to it, because a tool surface that compiles is not the same
+//! as one that answers.
+
+use serde_json::{Value, json};
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+
+struct Host {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    next_id: i64,
+}
+
+impl Host {
+    /// Start the host over this repository's own corpus.
+    fn start() -> Self {
+        let repo = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
+        let mut child = Command::new(env!("CARGO_BIN_EXE_tacit-mcp"))
+            .arg(repo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("host starts");
+        let stdin = child.stdin.take().expect("stdin");
+        let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+        let mut host = Self { child, stdin, stdout, next_id: 0 };
+        host.initialize();
+        host
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        self.next_id += 1;
+        let id = self.next_id;
+        let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        writeln!(self.stdin, "{message}").expect("write");
+        self.stdin.flush().expect("flush");
+
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).expect("read");
+        let response: Value = serde_json::from_str(&line).expect("json response");
+        assert_eq!(response["id"], id, "responses are read in order for one request at a time");
+        assert!(response.get("error").is_none(), "unexpected error: {response}");
+        response["result"].clone()
+    }
+
+    fn notify(&mut self, method: &str) {
+        let message = json!({"jsonrpc": "2.0", "method": method});
+        writeln!(self.stdin, "{message}").expect("write");
+        self.stdin.flush().expect("flush");
+    }
+
+    fn initialize(&mut self) -> Value {
+        let result = self.request(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "tacit-tests", "version": "1"}
+            }),
+        );
+        self.notify("notifications/initialized");
+        result
+    }
+
+    fn call(&mut self, tool: &str, arguments: Value) -> Value {
+        let result = self.request("tools/call", json!({"name": tool, "arguments": arguments}));
+        result
+            .get("structuredContent")
+            .cloned()
+            .or_else(|| {
+                result["content"][0]["text"]
+                    .as_str()
+                    .and_then(|t| serde_json::from_str(t).ok())
+            })
+            .unwrap_or(result)
+    }
+
+    fn tool_names(&mut self) -> Vec<String> {
+        let result = self.request("tools/list", json!({}));
+        result["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|t| t["name"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn the_host_speaks_mcp_and_loads_the_corpus() {
+    let mut host = Host::start();
+    let info = host.request("tools/list", json!({}));
+    assert!(!info["tools"].as_array().expect("tools").is_empty());
+}
+
+/// The ratchet as an executable claim: no sequence of tool calls an agent can
+/// make promotes anything, because the surface offers no way to.
+#[test]
+fn there_is_no_promote_tool() {
+    let mut host = Host::start();
+    let names = host.tool_names();
+    assert!(!names.is_empty());
+    for forbidden in ["promote", "verdict", "retire", "reject", "approve"] {
+        assert!(
+            !names.iter().any(|n| n.contains(forbidden)),
+            "the agent surface must not expose {forbidden}: {names:?}"
+        );
+    }
+    assert!(names.contains(&"tacit_propose_claim".to_string()));
+}
+
+#[test]
+fn search_answers_with_provenance() {
+    let mut host = Host::start();
+    let out = host.call(
+        "tacit_search",
+        json!({"query": "why is the runtime embedded rather than a server"}),
+    );
+    assert!(out["tags"].as_array().unwrap().iter().any(|t| t == "matches"));
+    assert_eq!(out["is_abstention"], false);
+
+    let first = &out["items"][0];
+    assert!(first["author"].as_str().is_some_and(|a| !a.is_empty()));
+    assert!(first["author_kind"].as_str().is_some());
+    assert!(first["state"].as_str().is_some_and(|s| s.contains("Promoted")));
+    assert!(first["source_channel"].as_str().is_some_and(|s| !s.is_empty()));
+    assert!(first["recorded_at"].as_str().is_some());
+}
+
+/// R-10 over the wire: a question the record does not settle comes back
+/// labelled, not paraphrased.
+#[test]
+fn search_abstains_on_what_the_record_does_not_cover() {
+    let mut host = Host::start();
+    let out = host.call(
+        "tacit_search",
+        json!({"query": "how does sharding across geographic regions work"}),
+    );
+    assert_eq!(out["is_abstention"], true);
+    let tags: Vec<&str> = out["tags"].as_array().unwrap().iter().map(|t| t.as_str().unwrap()).collect();
+    assert!(!tags.contains(&"matches"), "got {tags:?}");
+}
+
+#[test]
+fn open_questions_are_citable() {
+    let mut host = Host::start();
+    let out = host.call("tacit_open_questions", json!({}));
+    assert!(out["count"].as_u64().unwrap() >= 15, "the register's unknowns are loaded");
+    let first = &out["records"][0];
+    assert!(first["text"].as_str().is_some_and(|t| !t.is_empty()));
+}
+
+/// An agent may contribute, and what it contributes stays proposed.
+#[test]
+fn an_agent_can_propose_but_what_it_proposes_stays_proposed() {
+    let mut host = Host::start();
+    let proposed = host.call(
+        "tacit_propose_claim",
+        json!({
+            "text": "a claim contributed by the test agent",
+            "agent": "test-agent",
+            "source": "integration test"
+        }),
+    );
+    assert_eq!(proposed["state"], "proposed");
+    let id = proposed["record_id"].as_str().expect("id").to_string();
+
+    let fetched = host.call("tacit_get_record", json!({"record_id": id}));
+    assert_eq!(fetched["author_kind"], "agent");
+    assert!(fetched["state"].as_str().unwrap().contains("Proposed"));
+
+    // It is in the keeper's inbox, waiting on a person.
+    let pending = host.call("tacit_pending_proposals", json!({}));
+    let mine = pending["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["author"] == "test-agent")
+        .count();
+    assert_eq!(mine, 1);
+
+    // And it has no verdict history, because no verdict is reachable from here.
+    let history = host.call("tacit_history", json!({"record_id": id}));
+    assert!(history["verdicts"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn an_agent_can_register_an_open_question() {
+    let mut host = Host::start();
+    let before = host.call("tacit_open_questions", json!({}))["count"].as_u64().unwrap();
+    let registered = host.call(
+        "tacit_register_gap",
+        json!({
+            "question": "which embedding model should supply vector candidates?",
+            "agent": "test-agent",
+            "source": "integration test",
+            "trigger": "before the golden suite"
+        }),
+    );
+    assert_eq!(registered["state"], "registered");
+    let after = host.call("tacit_open_questions", json!({}))["count"].as_u64().unwrap();
+    assert_eq!(after, before + 1, "the question is immediately citable");
+}
+
+/// Record-time travel over the wire.
+#[test]
+fn as_of_reads_the_past() {
+    let mut host = Host::start();
+    let out = host.call("tacit_search", json!({"query": "runtime shape embedded server"}));
+    let id = out["items"][0]["id"].as_str().expect("an id").to_string();
+
+    let past = host.call("tacit_as_of", json!({"record_id": id, "at": "2020-01-01T00:00:00Z"}));
+    assert_eq!(past["state_then"], "not in the record");
+    assert!(past["state_now"].as_str().unwrap().contains("Promoted"));
+}
+
+#[test]
+fn every_call_is_audited() {
+    let mut host = Host::start();
+    host.call("tacit_search", json!({"query": "provenance"}));
+    host.call("tacit_open_questions", json!({}));
+    let audit = host.call("tacit_audit", json!({"limit": 10}));
+    let tools: Vec<&str> = audit["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["tool"].as_str().unwrap())
+        .collect();
+    assert!(tools.contains(&"tacit_search"));
+    assert!(tools.contains(&"tacit_open_questions"));
+}
+
+#[test]
+fn a_bad_id_is_a_clean_error_not_a_panic() {
+    let mut host = Host::start();
+    host.next_id += 1;
+    let id = host.next_id;
+    let message = json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {"name": "tacit_get_record", "arguments": {"record_id": "not-an-id"}}
+    });
+    writeln!(host.stdin, "{message}").expect("write");
+    host.stdin.flush().expect("flush");
+    let mut line = String::new();
+    host.stdout.read_line(&mut line).expect("read");
+    let response: Value = serde_json::from_str(&line).expect("json");
+    let text = response.to_string();
+    assert!(text.contains("not a valid"), "expected a clean parse error, got {text}");
+
+    // The host is still serving.
+    let names = host.tool_names();
+    assert!(!names.is_empty());
+}

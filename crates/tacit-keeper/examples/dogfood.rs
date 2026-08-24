@@ -317,10 +317,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    · this ledger is in-memory and dies at process exit; docs/DECISIONS.md");
     println!("      remains the authoritative copy, so Tacit does not yet *host* its corpus");
     println!("    · durable storage is U-5 and unresolved");
-    println!("  H-0001(b) — \"honestly abstain on registered unknowns\" — now has its raw");
-    println!("  material: the open questions are in the ledger, not only in a document.");
-    println!("  But tacit-mcp is still a stub, so no agent can reach any of it yet.");
-    println!("  Scored honestly: (a) partial, (b) groundwork only, (c) not started.");
+    println!();
+    println!("  H-0001(b) — \"MCP tools let an agent answer why Tacit chose X with");
+    println!("  provenance, and honestly abstain on registered unknowns\":");
+    println!("    · the capability exists and is tested end to end over stdio");
+    println!("      (cargo run -p tacit-mcp -- .), with no promote tool on the surface");
+    println!("    · but nothing has yet graded whether its answers are *good* — that is");
+    println!("      (c), and (c) has not started");
+    println!("  Scored honestly: (a) partial, (b) capability met but ungraded, (c) not started.");
 
     println!();
     Ok(())

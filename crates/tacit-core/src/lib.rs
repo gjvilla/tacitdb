@@ -33,7 +33,7 @@ pub use envelope::{
     Author, AuthorKind, ENVELOPE_VERSION, Envelope, Evidence, ReviewTrigger, SourceRef,
 };
 pub use error::Error;
-pub use id::{EntityId, RecordId};
+pub use id::{EntityId, IdParseError, RecordId};
 pub use ledger::{Contradiction, MemoryLedger, ReviewQueue, SOURCE_KIND};
 pub use measurement::{Measurement, MeasurementTarget};
 pub use projection::{
