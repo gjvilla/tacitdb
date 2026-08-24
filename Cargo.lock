@@ -856,6 +856,7 @@ dependencies = [
  "jiff",
  "proptest",
  "serde",
+ "serde_json",
  "thiserror",
  "ulid",
 ]

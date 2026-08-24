@@ -60,4 +60,13 @@ pub enum Error {
     /// produces otherwise is a modelling error, not a traversal to guess at.
     #[error("edge {record} has invalid traversal cost {cost}")]
     InvalidCost { record: RecordId, cost: f64 },
+
+    #[error("storage error at {path}: {detail}")]
+    Storage { path: std::path::PathBuf, detail: String },
+
+    #[error("{path} is corrupt at line {line}: {detail}")]
+    CorruptJournal { path: std::path::PathBuf, line: usize, detail: String },
+
+    #[error("envelope version {found} is not supported (this build reads {supported})")]
+    UnsupportedEnvelopeVersion { found: u16, supported: u16 },
 }

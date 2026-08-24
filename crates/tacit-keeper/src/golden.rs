@@ -13,7 +13,7 @@
 
 use crate::parse::ParseError;
 use tacit_core::{
-    Content, MemoryLedger, Outcome, Projection, Query, Retrieved, TextIndex, ViewSpec,
+    Content, Ledger, Outcome, Projection, Query, Retrieved, TextIndex, ViewSpec,
 };
 
 /// How far down the results an expected answer may appear and still count as
@@ -233,7 +233,7 @@ fn parse_expectation(
 
 /// Run every question against the record and grade it.
 pub fn run(
-    ledger: &MemoryLedger,
+    ledger: &Ledger,
     projection: &Projection,
     index: &TextIndex,
     questions: &[GoldenQuestion],
@@ -249,7 +249,7 @@ pub fn run(
     Scorecard { graded }
 }
 
-fn grade(ledger: &MemoryLedger, question: &GoldenQuestion, found: &Retrieved<'_>) -> Graded {
+fn grade(ledger: &Ledger, question: &GoldenQuestion, found: &Retrieved<'_>) -> Graded {
     let top: Vec<String> = found
         .items
         .iter()
@@ -289,7 +289,7 @@ fn grade(ledger: &MemoryLedger, question: &GoldenQuestion, found: &Retrieved<'_>
 
 /// The corpus label a record answers to (`D-0015`, `U-5`), for comparing
 /// against an expectation written in those terms.
-fn anchor_of(ledger: &MemoryLedger, record: &tacit_core::Record) -> String {
+fn anchor_of(ledger: &Ledger, record: &tacit_core::Record) -> String {
     let entities = match record.content() {
         Content::Claim(claim) => claim.entity_refs(),
         Content::Gap(gap) => gap.territory.clone(),
@@ -315,8 +315,8 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    fn corpus() -> (MemoryLedger, Projection, TextIndex) {
-        let mut ledger = MemoryLedger::new();
+    fn corpus() -> (Ledger, Projection, TextIndex) {
+        let mut ledger = Ledger::new();
         ingest_corpus(&mut ledger, &repo_root()).expect("corpus loads");
         let projection = Projection::rebuild(&ledger);
         let index = TextIndex::rebuild(&ledger);

@@ -13,6 +13,9 @@ mod entity;
 mod envelope;
 mod error;
 mod id;
+mod journal;
+#[cfg(test)]
+mod journal_tests;
 mod ledger;
 mod measurement;
 mod projection;
@@ -34,7 +37,8 @@ pub use envelope::{
 };
 pub use error::Error;
 pub use id::{EntityId, IdParseError, RecordId};
-pub use ledger::{Contradiction, MemoryLedger, ReviewQueue, SOURCE_KIND};
+pub use journal::{Event, Recovery};
+pub use ledger::{Contradiction, Ledger, Opened, ReviewQueue, SOURCE_KIND};
 pub use measurement::{Measurement, MeasurementTarget};
 pub use projection::{
     CostSpec, CostTransform, Edge, GraphView, MissingCost, Node, Path, Projection, Property,

@@ -8,13 +8,13 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use tacit_core::{MemoryLedger, Projection, TextIndex};
+use tacit_core::{Ledger, Projection, TextIndex};
 use tacit_keeper::corpus::ingest_corpus;
 use tacit_keeper::golden::{Verdict, parse_golden, run};
 
 fn main() -> ExitCode {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut ledger = MemoryLedger::new();
+    let mut ledger = Ledger::new();
     if let Err(error) = ingest_corpus(&mut ledger, &repo) {
         eprintln!("could not load the corpus: {error}");
         return ExitCode::FAILURE;

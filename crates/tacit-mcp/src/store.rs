@@ -3,7 +3,7 @@
 
 use jiff::Timestamp;
 use serde::Serialize;
-use tacit_core::{MemoryLedger, Projection, TextIndex};
+use tacit_core::{Ledger, Projection, TextIndex};
 
 /// Bounded so a long-running host cannot grow without limit; the oldest
 /// entries fall off rather than being silently discarded on write.
@@ -18,7 +18,7 @@ pub struct AuditEntry {
 }
 
 pub struct Store {
-    pub ledger: MemoryLedger,
+    pub ledger: Ledger,
     pub projection: Projection,
     pub index: TextIndex,
     audit: Vec<AuditEntry>,
@@ -26,7 +26,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(ledger: MemoryLedger) -> Self {
+    pub fn new(ledger: Ledger) -> Self {
         let projection = Projection::rebuild(&ledger);
         let index = TextIndex::rebuild(&ledger);
         Self { ledger, projection, index, audit: Vec::new(), dropped: 0 }

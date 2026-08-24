@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tacit_core::{
     Author, ClaimContent, Content, Draft, EntityId, Evidence, GapContent, HypothesisContent,
-    MemoryLedger, RecordId, ReviewTrigger, SourceRef, VerdictAction, VerdictContent,
+    Ledger, RecordId, ReviewTrigger, SourceRef, VerdictAction, VerdictContent,
 };
 
 /// Entity kind for a corpus record's identity anchor.
@@ -118,7 +118,7 @@ impl IngestReport {
 
 /// Read and ingest `docs/DECISIONS.md` beneath `repo_root`.
 pub fn ingest_decisions(
-    ledger: &mut MemoryLedger,
+    ledger: &mut Ledger,
     repo_root: &Path,
 ) -> Result<IngestReport, IngestError> {
     let decisions = read_doc(repo_root, "docs/DECISIONS.md")?;
@@ -130,7 +130,7 @@ pub fn ingest_decisions(
 /// what lets the engine answer "that is a registered open question" rather
 /// than "nothing found".
 pub fn ingest_corpus(
-    ledger: &mut MemoryLedger,
+    ledger: &mut Ledger,
     repo_root: &Path,
 ) -> Result<IngestReport, IngestError> {
     let decisions = read_doc(repo_root, "docs/DECISIONS.md")?;
@@ -144,7 +144,7 @@ fn read_doc(repo_root: &Path, relative: &str) -> Result<String, IngestError> {
 }
 
 pub fn ingest_text(
-    ledger: &mut MemoryLedger,
+    ledger: &mut Ledger,
     text: &str,
     register_text: Option<&str>,
     repo_root: &Path,
@@ -166,11 +166,11 @@ pub fn ingest_text(
     // either direction: a decision naming U-1 and an unknown naming D-0012
     // both find an anchor.
     for record in &parsed {
-        let entity = ledger.upsert_entity(DECISION_KIND, &record.id);
+        let entity = ledger.upsert_entity(DECISION_KIND, &record.id)?;
         report.decisions.push((record.id.clone(), entity));
     }
     for unknown in &unknowns {
-        let entity = ledger.upsert_entity(UNKNOWN_KIND, &unknown.id);
+        let entity = ledger.upsert_entity(UNKNOWN_KIND, &unknown.id)?;
         report.unknowns.push((unknown.id.clone(), entity));
     }
 
@@ -278,7 +278,7 @@ pub fn ingest_text(
 /// question rather than dropped — a register that loses its own commentary on
 /// ingest would be a poor advertisement for a corpus about honesty.
 fn ingest_gap(
-    ledger: &mut MemoryLedger,
+    ledger: &mut Ledger,
     unknown: &ParsedUnknown,
     author: &Author,
     report: &mut IngestReport,
@@ -318,7 +318,7 @@ fn ingest_gap(
 }
 
 fn ingest_one(
-    ledger: &mut MemoryLedger,
+    ledger: &mut Ledger,
     record: &ParsedRecord,
     repo_root: &Path,
     report: &mut IngestReport,
@@ -480,7 +480,7 @@ fn parse_date(
 /// repo-relative: absolute paths would carry the author's home directory into
 /// the corpus.
 fn resolve_evidence(
-    ledger: &mut MemoryLedger,
+    ledger: &mut Ledger,
     record: &ParsedRecord,
     repo_root: &Path,
     report: &mut IngestReport,
@@ -502,7 +502,7 @@ fn resolve_evidence(
                 entry: entry.clone(),
             });
         }
-        let source = ledger.upsert_entity(tacit_core::SOURCE_KIND, &relative);
+        let source = ledger.upsert_entity(tacit_core::SOURCE_KIND, &relative)?;
         if !report.sources.iter().any(|(label, _)| *label == relative) {
             report.sources.push((relative.clone(), source));
         }
@@ -570,8 +570,8 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    fn ingested() -> (MemoryLedger, IngestReport) {
-        let mut ledger = MemoryLedger::new();
+    fn ingested() -> (Ledger, IngestReport) {
+        let mut ledger = Ledger::new();
         let report = ingest_decisions(&mut ledger, &repo_root()).expect("corpus ingests");
         (ledger, report)
     }
@@ -775,8 +775,8 @@ mod tests {
         }
     }
 
-    fn ingested_corpus() -> (MemoryLedger, IngestReport) {
-        let mut ledger = MemoryLedger::new();
+    fn ingested_corpus() -> (Ledger, IngestReport) {
+        let mut ledger = Ledger::new();
         let report = ingest_corpus(&mut ledger, &repo_root()).expect("both documents ingest");
         (ledger, report)
     }
@@ -801,7 +801,7 @@ mod tests {
         assert_eq!(ledger.registered_gaps().len(), open);
 
         // A decisions-only ingest has none of this — the contrast is the point.
-        let mut bare = MemoryLedger::new();
+        let mut bare = Ledger::new();
         ingest_decisions(&mut bare, &repo_root()).unwrap();
         assert!(bare.registered_gaps().is_empty());
     }

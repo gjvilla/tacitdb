@@ -40,6 +40,11 @@ What the project has decided and recorded, with owners and review triggers:
   answered what it does not" never collapse into one accuracy number. Known
   shortfalls must name a registered unknown; a failure with no registered
   cause turns the suite red and fails the build.
+- **The record survives the process** (2026-08-23, D-0019). `cargo run -p
+  tacit-mcp -- --store <path> .` keeps the ledger on disk, so what an agent
+  proposes is still waiting for a person on the next run. Loading replays the
+  log through the grammar rather than deserializing it, so a hand-edited store
+  cannot smuggle in a promotion.
 - **Agents can reach the record** (2026-08-23). `cargo run -p tacit-mcp -- .`
   serves this repository's corpus over MCP. The ratchet is visible in the tool
   surface as an absence: there is no promote tool, so no sequence of calls an
@@ -67,7 +72,7 @@ the decision — because an unregistered gap is how systems bluff.
 | U-2 | ~~Runtime shape~~ **Resolved 2026-08-23** → D-0015: embedded-first Rust library + Python bindings; an MCP host binary is the only served surface in v1 | — | Multi-app serving reopens later as a keeper-layer wrapper around the same core (see D-0015's trigger). Kept for the record. |
 | U-3 | Query language: whether, when, and what shape | Observed real agent usage of the v1 MCP toolset | Deferred, not rejected (D-0007). |
 | U-4 | Which graph algorithms live in-engine | Data-model doc + first retrieval implementation | Weighted Dijkstra/Yen's almost certainly (R-5); community detection / centrality unclear. |
-| U-5 | Storage layer: build vs embed (redb / RocksDB / sled / custom) | Implementation phase, after U-1 and U-2 | An event-log + projection design (rejected as the *conceptual* unit in D-0004) remains a live *implementation* candidate. |
+| U-5 | ~~Storage layer~~ **Resolved 2026-08-23** → D-0019: an append-only JSON-lines event log, fsynced before the in-memory commit, replayed through the same validation an append runs. No external storage dependency. | — | The event-log candidate won. The load path was the real question, not the format: a store that is re-validated rather than trusted is what keeps the invariants true of records that came off disk. Residual costs are U-24 and U-25. |
 | U-6 | Name: trademark counsel review of the live TACIT Class-9 mark before commercial use | Before any commercial use | Narrowed 2026-08-23: registries verified — bare `tacit` taken everywhere, **`tacitdb` clean** (crates.io/GitHub/PyPI; domains likely unregistered, confirm at registrar). Registrable identity `tacitdb`, product name Tacit (D-0011). Counsel item remains. |
 | U-7 | IP clarity: employment-agreement invention-assignment reach over a domain-adjacent personal project | Before any public release; ideally sooner | Personal-time intent is not legal protection. Get clarity, ideally written. Flagged, not legal advice. |
 | U-8 | Which layer has product pull: engine or keeper | First external adoption/interest signal | The two-layer bet (D-0002) defers this deliberately. |
@@ -85,6 +90,8 @@ the decision — because an unregistered gap is how systems bluff.
 | U-20 | Set verdicts vs the transcription cost: the corpus needed two verdicts per record for what a person performed as one editorial act | With U-16 | Concrete evidence for U-16 produced by the first real ingest, not speculation. |
 | U-21 | Relation-scope contradictions never surface (invariant 7 covers attributes only) | With U-15 | Raised by adversarial review 2026-08-23 and confirmed as real-but-deliberate: the engine cannot know a predicate's cardinality. Kept visible so it is a decision, not an oversight. |
 | U-23 | Retrieval quality is lexical only: BM25 separates covered from uncovered but cannot see that "storage engine" and "storage layer" are one question. The query-side stopword list is an English crutch that document frequency cannot replace on a small technical corpus — there, function words are *rare*, so IDF rewards them | Before the golden suite (H-0001c), and before any claim that retrieval is good | The fusion stage exists so vector candidates join the same plan (R-2). Shape, filters, outcome tags and abstention are settled and tested; only the candidate source is thin. **Measured 2026-08-23:** the golden suite scores 10/14 with 4 shortfalls, all this cause — two under-confident (right record at rank 1, declined to call it a match), one bluff, one spelling variance ("licence" vs "license"). That last is close to the shortest possible demonstration of the limit. |
+| U-24 | Snapshots and compaction: replay is O(log) on every open, and the log only grows | When open time or log size becomes uncomfortable | The accepted cost of D-0019. A snapshot must itself be replay-validated or it reintroduces the bypass it exists to avoid — that is the design constraint, not the file format. |
+| U-25 | `sync_data` per append is correct but slow for bulk ingest | When a bulk corpus makes ingest time uncomfortable | Batching needs a durability story for the batch boundary: what a caller is promised when a batch is half-written. Interacts with U-16's set verdicts. |
 | U-22 | A backwards system-clock step makes every `append` fail with no recovery path | Before durable storage (U-5) | The monotonicity guard that makes `state_of_at` sound has no escape hatch. Confirmed by review; deferred because the alternative (accepting backwards time) breaks bitemporal reads, and the real fix belongs with the storage layer's clock story. |
 
 ## Room 3 · Unknown knowns

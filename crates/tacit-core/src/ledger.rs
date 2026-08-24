@@ -3,24 +3,26 @@ use crate::entity::Entity;
 use crate::envelope::{Author, AuthorKind, Envelope};
 use crate::error::Error;
 use crate::id::{EntityId, RecordId};
+use crate::journal::{Event, Journal, Recovery};
 use crate::measurement::{Measurement, MeasurementTarget};
 use crate::record::{Draft, Record};
 use crate::state::{ClaimState, GapState, HypothesisState, RecordState};
+use crate::envelope::ENVELOPE_VERSION;
 use jiff::Timestamp;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// The kind reserved for entities that evidence may point at.
 pub const SOURCE_KIND: &str = "source";
 
-/// The in-memory ledger: the governed record store, the entity registry, and
-/// the instrument panel. Storage-engine questions (U-5) live behind this API;
-/// the invariants do not.
+/// The ledger: the governed record store, the entity registry, and the
+/// instrument panel.
 ///
 /// Ordering note: the log is the definition of order. `RecordId` is a ULID and
 /// is *not* monotonic within a millisecond, so nothing may range-scan on id in
 /// place of walking the log.
 #[derive(Debug, Default)]
-pub struct MemoryLedger {
+pub struct Ledger {
     entities: BTreeMap<EntityId, Entity>,
     records: BTreeMap<RecordId, Record>,
     /// Total append order. State folds run in log order, not timestamp order,
@@ -31,6 +33,15 @@ pub struct MemoryLedger {
     /// Highest record-time appended. The log must be a prefix of time.
     last_recorded_at: Option<Timestamp>,
     panel: BTreeMap<(MeasurementTarget, String), Measurement>,
+    /// When present, every write is on disk before it is in memory.
+    journal: Option<Journal>,
+}
+
+/// A ledger opened from disk, with what recovery had to do to get there.
+#[derive(Debug)]
+pub struct Opened {
+    pub ledger: Ledger,
+    pub recovery: Recovery,
 }
 
 /// The keeper's review work-queue (design/001 §8): promoted claims due for
@@ -51,22 +62,34 @@ pub struct Contradiction<'a> {
     pub b: &'a Record,
 }
 
-impl MemoryLedger {
+impl Ledger {
     pub fn new() -> Self {
         Self::default()
     }
 
     // ── Entities ────────────────────────────────────────────────────────────
 
-    pub fn add_entity(&mut self, kind: impl Into<String>, label: impl Into<String>) -> EntityId {
+    /// Fallible because a durable ledger puts the entity on disk before it is
+    /// in memory: a store that cannot be written to must say so rather than
+    /// carry on holding state its own log does not have.
+    pub fn add_entity(
+        &mut self,
+        kind: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Result<EntityId, Error> {
+        let (kind, label) = (kind.into(), label.into());
         let id = EntityId::mint();
-        self.entities.insert(id, Entity::new(id, kind.into(), label.into()));
-        id
+        if let Some(journal) = &mut self.journal {
+            let event = Event::Entity { id, kind: kind.clone(), label: label.clone() };
+            journal.append(&event)?;
+        }
+        self.entities.insert(id, Entity::new(id, kind, label));
+        Ok(id)
     }
 
     /// Register a source — the only entity kind evidence may point at
     /// (design/001 §8). Exists so no caller has to type the magic string.
-    pub fn add_source(&mut self, label: impl Into<String>) -> EntityId {
+    pub fn add_source(&mut self, label: impl Into<String>) -> Result<EntityId, Error> {
         self.add_entity(SOURCE_KIND, label)
     }
 
@@ -89,9 +112,11 @@ impl MemoryLedger {
             .map(|e| e.id())
     }
 
-    pub fn upsert_entity(&mut self, kind: &str, label: &str) -> EntityId {
-        self.find_entity(kind, label)
-            .unwrap_or_else(|| self.add_entity(kind, label))
+    pub fn upsert_entity(&mut self, kind: &str, label: &str) -> Result<EntityId, Error> {
+        match self.find_entity(kind, label) {
+            Some(id) => Ok(id),
+            None => self.add_entity(kind, label),
+        }
     }
 
     // ── The governed ledger ─────────────────────────────────────────────────
@@ -109,6 +134,14 @@ impl MemoryLedger {
         draft: Draft,
         recorded_at: Timestamp,
     ) -> Result<RecordId, Error> {
+        self.validate(&draft, recorded_at)?;
+        let id = RecordId::mint();
+        self.write(id, draft, recorded_at, ENVELOPE_VERSION)
+    }
+
+    /// Every check an append runs, with nothing mutated. Replay calls this too,
+    /// which is what makes a loaded ledger as trustworthy as a live one.
+    fn validate(&self, draft: &Draft, recorded_at: Timestamp) -> Result<(), Error> {
         let now = Timestamp::now();
         if recorded_at > now {
             return Err(Error::FutureRecordTime { proposed: recorded_at, now });
@@ -163,20 +196,59 @@ impl MemoryLedger {
                 self.check_verdict(&verdict.action)?;
             }
         }
+        Ok(())
+    }
 
-        let id = RecordId::mint();
+    /// Journal first, then commit: a failed write leaves the ledger exactly as
+    /// it was rather than ahead of its own log.
+    fn write(
+        &mut self,
+        id: RecordId,
+        draft: Draft,
+        recorded_at: Timestamp,
+        envelope_version: u16,
+    ) -> Result<RecordId, Error> {
+        if envelope_version != ENVELOPE_VERSION {
+            return Err(Error::UnsupportedEnvelopeVersion {
+                found: envelope_version,
+                supported: ENVELOPE_VERSION,
+            });
+        }
+        let valid_from = draft.valid_from.unwrap_or(recorded_at);
+
+        if let Some(journal) = &mut self.journal {
+            let event = Event::Record {
+                id,
+                recorded_at,
+                envelope_version,
+                author: draft.author.clone(),
+                source: draft.source.clone(),
+                valid_from,
+                valid_to: draft.valid_to,
+                evidence: draft.evidence.clone(),
+                review_trigger: draft.review_trigger.clone(),
+                supersedes: draft.supersedes,
+                content: draft.content.clone(),
+            };
+            journal.append(&event)?;
+        }
+
         let envelope = Envelope::seal(
             draft.author,
             draft.source,
             recorded_at,
-            draft.valid_from,
+            Some(valid_from),
             draft.valid_to,
             draft.evidence,
             draft.review_trigger,
             draft.supersedes,
         );
-        let record = Record::new(id, envelope, draft.content);
+        self.commit(Record::new(id, envelope, draft.content), recorded_at);
+        Ok(id)
+    }
 
+    fn commit(&mut self, record: Record, recorded_at: Timestamp) {
+        let id = record.id();
         if let Content::Verdict(v) = record.content() {
             for touched in v.action.touched() {
                 self.by_target.entry(touched).or_default().push(id);
@@ -185,7 +257,68 @@ impl MemoryLedger {
         self.records.insert(id, record);
         self.log.push(id);
         self.last_recorded_at = Some(recorded_at);
-        Ok(id)
+    }
+
+    // ── Durability ──────────────────────────────────────────────────────────
+
+    /// Open a ledger backed by an append-only log, replaying what is there.
+    ///
+    /// Replay is not deserialization: every event goes through the same
+    /// validation an append runs, against the state the events before it
+    /// built. A log that has been edited to promote something cannot load,
+    /// because promotion is not a field — it is a fold over verdicts, and a
+    /// forged verdict still has to be legal.
+    pub fn open(path: impl AsRef<Path>) -> Result<Opened, Error> {
+        let (events, journal, recovery) = crate::journal::read(path.as_ref())?;
+        let mut ledger = Ledger::new();
+        for event in events {
+            ledger.replay(event)?;
+        }
+        ledger.journal = Some(journal);
+        Ok(Opened { ledger, recovery })
+    }
+
+    fn replay(&mut self, event: Event) -> Result<(), Error> {
+        match event {
+            Event::Entity { id, kind, label } => {
+                self.entities.insert(id, Entity::new(id, kind, label));
+            }
+            Event::Record {
+                id,
+                recorded_at,
+                envelope_version,
+                author,
+                source,
+                valid_from,
+                valid_to,
+                evidence,
+                review_trigger,
+                supersedes,
+                content,
+            } => {
+                let draft = Draft {
+                    author,
+                    source,
+                    valid_from: Some(valid_from),
+                    valid_to,
+                    evidence,
+                    review_trigger,
+                    supersedes,
+                    content,
+                };
+                self.validate(&draft, recorded_at)?;
+                self.write(id, draft, recorded_at, envelope_version)?;
+            }
+            Event::Measurement { target, name, value, at, by } => {
+                self.apply_measurement(target, name, value, by, at)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The path this ledger is durable to, if any.
+    pub fn journal_path(&self) -> Option<&Path> {
+        self.journal.as_ref().map(|j| j.path())
     }
 
     fn check_entities_exist(&self, refs: &[EntityId]) -> Result<(), Error> {
@@ -447,6 +580,26 @@ impl MemoryLedger {
         updated_by: Author,
         at: Timestamp,
     ) -> Result<(), Error> {
+        let name = name.into();
+        if self.journal.is_some() {
+            // Validate before the write so a rejected measurement never
+            // reaches the log.
+            self.check_measurement_target(target)?;
+            let event = Event::Measurement {
+                target,
+                name: name.clone(),
+                value,
+                at,
+                by: updated_by.clone(),
+            };
+            if let Some(journal) = &mut self.journal {
+                journal.append(&event)?;
+            }
+        }
+        self.apply_measurement(target, name, value, updated_by, at)
+    }
+
+    fn check_measurement_target(&self, target: MeasurementTarget) -> Result<(), Error> {
         match target {
             MeasurementTarget::Entity(e) => {
                 if !self.entities.contains_key(&e) {
@@ -460,6 +613,18 @@ impl MemoryLedger {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn apply_measurement(
+        &mut self,
+        target: MeasurementTarget,
+        name: impl Into<String>,
+        value: f64,
+        updated_by: Author,
+        at: Timestamp,
+    ) -> Result<(), Error> {
+        self.check_measurement_target(target)?;
         let name = name.into();
         self.panel.insert(
             (target, name.clone()),
@@ -490,10 +655,10 @@ mod tests {
         Timestamp::from_second(1_756_000_000 + offset).unwrap()
     }
 
-    fn setup() -> (MemoryLedger, EntityId, EntityId) {
-        let mut ledger = MemoryLedger::new();
-        let source = ledger.add_source("founding interview");
-        let subject = ledger.add_entity("process", "torque check");
+    fn setup() -> (Ledger, EntityId, EntityId) {
+        let mut ledger = Ledger::new();
+        let source = ledger.add_source("founding interview").unwrap();
+        let subject = ledger.add_entity("process", "torque check").unwrap();
         (ledger, source, subject)
     }
 
@@ -708,8 +873,8 @@ mod tests {
     #[test]
     fn claims_about_unknown_entities_are_rejected() {
         let (mut ledger, _, subject) = setup();
-        let mut other = MemoryLedger::new();
-        let foreign = other.add_entity("process", "elsewhere");
+        let mut other = Ledger::new();
+        let foreign = other.add_entity("process", "elsewhere").unwrap();
         let draft = Draft::new(
             Author::human("Greg"),
             SourceRef::channel("interview"),
@@ -727,8 +892,8 @@ mod tests {
     #[test]
     fn prose_claims_validate_their_entity_refs() {
         let (mut ledger, _, subject) = setup();
-        let mut other = MemoryLedger::new();
-        let foreign = other.add_entity("decision", "elsewhere");
+        let mut other = Ledger::new();
+        let foreign = other.add_entity("decision", "elsewhere").unwrap();
 
         let good = Draft::new(
             Author::human("Greg"),
@@ -909,7 +1074,7 @@ mod tests {
     #[test]
     fn measurements_live_on_the_panel_not_the_ledger() {
         let (mut ledger, _, subject) = setup();
-        let object = ledger.add_entity("table", "orders");
+        let object = ledger.add_entity("table", "orders").unwrap();
         let relation = ledger
             .append(Draft::new(
                 Author::agent("catalog-sync"),
@@ -967,9 +1132,9 @@ mod tests {
 
     #[test]
     fn entity_lookup_deduplicates_by_kind_and_label() {
-        let mut ledger = MemoryLedger::new();
-        let a = ledger.add_source("docs/REGISTER.md");
-        let b = ledger.upsert_entity(SOURCE_KIND, "docs/REGISTER.md");
+        let mut ledger = Ledger::new();
+        let a = ledger.add_source("docs/REGISTER.md").unwrap();
+        let b = ledger.upsert_entity(SOURCE_KIND, "docs/REGISTER.md").unwrap();
         assert_eq!(a, b);
         assert_eq!(ledger.entities().count(), 1);
         assert_eq!(ledger.find_entity("source", "nope"), None);

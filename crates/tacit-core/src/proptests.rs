@@ -11,7 +11,7 @@ use crate::content::{
 };
 use crate::envelope::{Author, SourceRef};
 use crate::id::{EntityId, RecordId};
-use crate::ledger::MemoryLedger;
+use crate::ledger::Ledger;
 use crate::projection::{Projection, StateFilter, ViewSpec};
 use crate::retrieval::{Outcome, Query, TextIndex};
 use crate::record::Draft;
@@ -56,7 +56,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
 /// every op. Ops that the grammar rejects are simply skipped — an illegal
 /// transition is a correct outcome, not a test failure.
 struct Interpreter {
-    ledger: MemoryLedger,
+    ledger: Ledger,
     incremental: Projection,
     index: TextIndex,
     entities: Vec<EntityId>,
@@ -67,7 +67,7 @@ struct Interpreter {
 impl Interpreter {
     fn new() -> Self {
         Self {
-            ledger: MemoryLedger::new(),
+            ledger: Ledger::new(),
             incremental: Projection::empty(),
             index: TextIndex::empty(),
             entities: Vec::new(),
@@ -99,7 +99,7 @@ impl Interpreter {
         match op {
             Op::AddEntity => {
                 let n = self.entities.len();
-                let id = self.ledger.add_entity("station", format!("E{n}"));
+                let id = self.ledger.add_entity("station", format!("E{n}")).unwrap();
                 self.entities.push(id);
             }
             Op::Attribute { subject, name, value, from, span } => {

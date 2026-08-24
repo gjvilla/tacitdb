@@ -6,7 +6,7 @@
 //! came from is not an answer this engine gives.
 
 use serde::Serialize;
-use tacit_core::{Content, MemoryLedger, Record, RecordState, indexable_text};
+use tacit_core::{Content, Ledger, Record, RecordState, indexable_text};
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct EvidenceOut {
@@ -40,7 +40,7 @@ pub struct RecordOut {
 }
 
 impl RecordOut {
-    pub fn of(ledger: &MemoryLedger, record: &Record) -> Self {
+    pub fn of(ledger: &Ledger, record: &Record) -> Self {
         let envelope = record.envelope();
         let entities = match record.content() {
             Content::Claim(claim) => claim.entity_refs(),

@@ -5,14 +5,14 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tacit_core::{
-    Author, ClaimContent, Content, CostSpec, CostTransform, MeasurementTarget, MemoryLedger,
+    Author, ClaimContent, Content, CostSpec, CostTransform, MeasurementTarget, Ledger,
     MissingCost, Projection, Query, RecordState, StateFilter, TextIndex, Via, ViewSpec,
 };
 use tacit_keeper::corpus::{DECISION_KIND, ingest_corpus};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut ledger = MemoryLedger::new();
+    let mut ledger = Ledger::new();
 
     let before_ingest = jiff::Timestamp::now();
     let report = ingest_corpus(&mut ledger, &repo_root)?;
@@ -313,10 +313,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    · every record carries a complete envelope — the engine rejects any that does not");
     println!("    · promoted state is reachable only through a human-authored verdict");
     println!("    · provenance, bitemporal reads, and the projected graph all answer over the corpus");
+    println!("    · the record now survives the process (D-0019): run the MCP host with");
+    println!("      --store <path> and the ledger is replayed from an append-only log,");
+    println!("      re-validated through the same grammar an append runs");
     println!("  NOT yet met:");
-    println!("    · this ledger is in-memory and dies at process exit; docs/DECISIONS.md");
-    println!("      remains the authoritative copy, so Tacit does not yet *host* its corpus");
-    println!("    · durable storage is U-5 and unresolved");
+    println!("    · this example still uses a scratch in-memory ledger, and");
+    println!("      docs/DECISIONS.md remains the copy a person edits — the engine holds");
+    println!("      the corpus faithfully, but the document is still upstream of it");
     println!();
     println!("  H-0001(b) — \"MCP tools let an agent answer why Tacit chose X with");
     println!("  provenance, and honestly abstain on registered unknowns\":");
@@ -331,8 +334,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Today: 10/14, four of those passes earned by declining to answer, and");
     println!("  four known shortfalls tracked against U-23 rather than hidden.");
     println!();
-    println!("  Scored honestly: (a) partial, (b) capability met, (c) instrument exists");
-    println!("  and reports honestly — retrieval quality is the open work, not the grading.");
+    println!("  Scored honestly: (a) durable and re-validated, with the document still");
+    println!("  upstream; (b) capability met; (c) instrument exists and reports honestly.");
+    println!("  Retrieval quality (U-23) is the open work, not the grading.");
 
     println!();
     Ok(())
@@ -369,7 +373,7 @@ fn title_of(node: &tacit_core::Node<'_>) -> String {
         .unwrap_or_else(|| "(untitled in this view)".to_string())
 }
 
-fn render_path(path: &Option<tacit_core::Path>, ledger: &MemoryLedger) -> String {
+fn render_path(path: &Option<tacit_core::Path>, ledger: &Ledger) -> String {
     let Some(path) = path else { return "no path".to_string() };
     if path.edges.is_empty() {
         return "same node".to_string();
@@ -387,7 +391,7 @@ fn render_path(path: &Option<tacit_core::Path>, ledger: &MemoryLedger) -> String
     format!("{}  (cost {:.0})", hops.join(" -> "), path.total_cost)
 }
 
-fn label_of(ledger: &MemoryLedger, id: tacit_core::EntityId) -> String {
+fn label_of(ledger: &Ledger, id: tacit_core::EntityId) -> String {
     ledger
         .entity(id)
         .filter(|e| e.kind() == DECISION_KIND)
@@ -396,7 +400,7 @@ fn label_of(ledger: &MemoryLedger, id: tacit_core::EntityId) -> String {
 }
 
 /// The label of whatever a record is about, for readable output.
-fn anchor_label(ledger: &MemoryLedger, record: &tacit_core::Record) -> String {
+fn anchor_label(ledger: &Ledger, record: &tacit_core::Record) -> String {
     let entities = match record.content() {
         Content::Claim(claim) => claim.entity_refs(),
         Content::Gap(gap) => gap.territory.clone(),

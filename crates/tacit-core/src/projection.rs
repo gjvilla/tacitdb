@@ -25,7 +25,7 @@ use crate::entity::Entity;
 use crate::envelope::{AuthorKind, Envelope};
 use crate::error::Error;
 use crate::id::{EntityId, RecordId};
-use crate::ledger::MemoryLedger;
+use crate::ledger::Ledger;
 use crate::measurement::{Measurement, MeasurementTarget};
 use crate::record::Record;
 use crate::state::{ClaimState, GapState, HypothesisState, RecordState};
@@ -199,7 +199,7 @@ impl Projection {
     }
 
     /// The canonical deterministic rebuild — literally `empty().advance()`.
-    pub fn rebuild(ledger: &MemoryLedger) -> Self {
+    pub fn rebuild(ledger: &Ledger) -> Self {
         let mut projection = Self::empty();
         projection.advance(ledger);
         projection
@@ -211,7 +211,7 @@ impl Projection {
     /// Owning the cursor is deliberate: an `apply(record)` that trusted the
     /// caller to feed each record exactly once in log order would make
     /// double-apply and skipped-record silent corruption.
-    pub fn advance(&mut self, ledger: &MemoryLedger) -> usize {
+    pub fn advance(&mut self, ledger: &Ledger) -> usize {
         let log = ledger.log();
         debug_assert!(
             log.len() >= self.applied,
@@ -296,7 +296,7 @@ impl Projection {
     }
 
     /// Pair with a ledger and a view spec. Free — no allocation, no rebuild.
-    pub fn view<'a>(&'a self, ledger: &'a MemoryLedger, spec: ViewSpec) -> GraphView<'a> {
+    pub fn view<'a>(&'a self, ledger: &'a Ledger, spec: ViewSpec) -> GraphView<'a> {
         GraphView { ledger, projection: self, spec }
     }
 }
@@ -306,7 +306,7 @@ impl Projection {
 /// A transient pairing of index, ledger, and view spec.
 #[derive(Debug, Clone, Copy)]
 pub struct GraphView<'a> {
-    ledger: &'a MemoryLedger,
+    ledger: &'a Ledger,
     projection: &'a Projection,
     spec: ViewSpec,
 }
@@ -887,17 +887,17 @@ mod tests {
     }
 
     struct Fixture {
-        ledger: MemoryLedger,
+        ledger: Ledger,
         a: EntityId,
         b: EntityId,
         c: EntityId,
     }
 
     fn fixture() -> Fixture {
-        let mut ledger = MemoryLedger::new();
-        let a = ledger.add_entity("station", "A");
-        let b = ledger.add_entity("station", "B");
-        let c = ledger.add_entity("station", "C");
+        let mut ledger = Ledger::new();
+        let a = ledger.add_entity("station", "A").unwrap();
+        let b = ledger.add_entity("station", "B").unwrap();
+        let c = ledger.add_entity("station", "C").unwrap();
         Fixture { ledger, a, b, c }
     }
 

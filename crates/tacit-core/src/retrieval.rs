@@ -26,7 +26,7 @@
 
 use crate::content::{ClaimContent, Content};
 use crate::id::{EntityId, RecordId};
-use crate::ledger::MemoryLedger;
+use crate::ledger::Ledger;
 use crate::projection::{GraphView, Projection, ViewSpec};
 use crate::record::Record;
 use std::collections::{BTreeMap, BTreeSet};
@@ -105,7 +105,7 @@ impl TextIndex {
         }
     }
 
-    pub fn rebuild(ledger: &MemoryLedger) -> Self {
+    pub fn rebuild(ledger: &Ledger) -> Self {
         let mut index = Self::empty();
         index.advance(ledger);
         index
@@ -113,7 +113,7 @@ impl TextIndex {
 
     /// Fold the log suffix this index has not seen. A no-op when nothing was
     /// appended; returns the number of records consumed.
-    pub fn advance(&mut self, ledger: &MemoryLedger) -> usize {
+    pub fn advance(&mut self, ledger: &Ledger) -> usize {
         let log = ledger.log();
         debug_assert!(log.len() >= self.applied, "index advanced against a shorter log");
         let start = self.applied;
@@ -175,7 +175,7 @@ impl TextIndex {
     /// Pair the index with a ledger, a projection and a view.
     pub fn retriever<'a>(
         &'a self,
-        ledger: &'a MemoryLedger,
+        ledger: &'a Ledger,
         projection: &'a Projection,
         spec: ViewSpec,
     ) -> Retriever<'a> {
@@ -433,7 +433,7 @@ impl Candidates {
 
 pub struct Retriever<'a> {
     index: &'a TextIndex,
-    ledger: &'a MemoryLedger,
+    ledger: &'a Ledger,
     projection: &'a Projection,
     view: GraphView<'a>,
 }
@@ -763,15 +763,15 @@ mod tests {
     use crate::projection::StateFilter;
 
     struct Fixture {
-        ledger: MemoryLedger,
+        ledger: Ledger,
         torque: EntityId,
         rail: EntityId,
     }
 
     fn fixture() -> Fixture {
-        let mut ledger = MemoryLedger::new();
-        let torque = ledger.add_entity("process", "torque check");
-        let rail = ledger.add_entity("component", "seat rail");
+        let mut ledger = Ledger::new();
+        let torque = ledger.add_entity("process", "torque check").unwrap();
+        let rail = ledger.add_entity("component", "seat rail").unwrap();
         Fixture { ledger, torque, rail }
     }
 
@@ -802,7 +802,7 @@ mod tests {
         )
     }
 
-    fn setup() -> (MemoryLedger, EntityId, EntityId) {
+    fn setup() -> (Ledger, EntityId, EntityId) {
         let mut f = fixture();
         let promoted = f
             .ledger
@@ -817,7 +817,7 @@ mod tests {
 
     fn retrieve<'a>(
         index: &'a TextIndex,
-        ledger: &'a MemoryLedger,
+        ledger: &'a Ledger,
         projection: &'a Projection,
         spec: ViewSpec,
         query: &Query,
@@ -1008,7 +1008,7 @@ mod tests {
 
     #[test]
     fn an_empty_record_abstains() {
-        let ledger = MemoryLedger::new();
+        let ledger = Ledger::new();
         let index = TextIndex::rebuild(&ledger);
         let projection = Projection::rebuild(&ledger);
         let found =
@@ -1108,8 +1108,8 @@ mod tests {
 
     #[test]
     fn rrf_fusion_is_order_preserving_for_one_ranking() {
-        let mut ledger = MemoryLedger::new();
-        let e = ledger.add_entity("x", "x");
+        let mut ledger = Ledger::new();
+        let e = ledger.add_entity("x", "x").unwrap();
         let a = ledger.append(prose(e, "alpha", Author::human("M"))).unwrap();
         let b = ledger.append(prose(e, "beta", Author::human("M"))).unwrap();
         let ranking = vec![(a, 9.0), (b, 1.0)];

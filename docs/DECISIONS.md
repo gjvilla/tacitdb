@@ -529,6 +529,56 @@ host is a host, not a database server).
 
 ---
 
+## D-0019 · Durability: an append-only log, replayed through the grammar
+
+```yaml
+id: D-0019
+state: promoted
+author: Greg Villa
+recorded: 2026-08-23
+valid_from: 2026-08-23
+source: storage round — resolves U-5
+evidence: [design/001-data-model.md §3, REQUIREMENTS.md R-3]
+review_trigger: when replay time or log size makes snapshots necessary
+  (U-24), or when a workload needs random access the log cannot serve
+```
+
+**Assertion.** The store is an append-only log of *events* — an entity, a
+record append, or a measurement — one JSON object per line, fsynced before the
+in-memory commit. Opening a ledger replays the log through **the same
+validation an append runs**: evidence must still resolve to a source, entity
+refs must still exist, and a verdict must still be legal against the state the
+earlier events built. Nothing is deserialized into a sealed type. There is no
+external storage dependency.
+
+**Forces.** The load path was the whole problem, and the veteran review named
+it before any code existed: `Record` and `Envelope` deliberately have no
+`Deserialize`, so the obvious move — read records off disk — would have made
+every invariant true only of records that arrived through `append`. Since a
+durable store is where records spend most of their life, the ratchet would
+have ended up guarding an empty doorway. Validated replay closes that: **the
+store is not trusted, it is re-validated.** A hand-edited log cannot promote
+anything, because promotion is not a field anyone can write — it is a fold
+over verdicts, and a forged verdict has to survive the same grammar a live one
+does. Two tests hold that property down.
+
+The format follows from the model rather than being chosen against it: the
+governed ledger is already an append-only log, and derived indexes are already
+rebuildable (§6), so there is nothing to persist but the events.
+
+**Alternatives rejected.** An embedded key-value store (redb, RocksDB, sled)
+— it would store records, which reintroduces the bypass unless replay
+validates anyway, and adds a dependency plus a format the project does not
+control; a custom binary format (no advantage over JSON lines at this scale,
+and the log stops being readable with `tail`); trusting the store and
+validating only on write (the failure this decision exists to prevent).
+
+**Accepted costs, both registered.** Replay is O(log) on every open, so a large
+corpus will eventually want snapshots (U-24). And `sync_data` per append is
+correct but slow in bulk (U-25).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
