@@ -632,6 +632,106 @@ confidence finding above, which is worth more than the ranking improvement).
 
 ---
 
+## D-0021 · Re-ingest is a sync: the documents stay upstream
+
+```yaml
+id: D-0021
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: storage round — resolves U-19
+evidence: [docs/DECISIONS.md — this file is the upstream copy, design/001-data-model.md §3.1]
+review_trigger: when a corpus arrives that has no stable per-record identity in
+  its source document, or when bulk ingest (U-16) needs set verdicts
+```
+
+**Assertion.** `docs/DECISIONS.md` and `docs/REGISTER.md` are the copies a
+person edits, and the ledger is downstream of them. Loading them a second time
+is therefore a sync, not a load. Each source record is fingerprinted into its
+own provenance, so a later run can tell three cases apart: a record the ledger
+has never seen is appended; a record it holds word for word writes nothing at
+all; and an edited record is appended superseding its predecessor, with the
+document's `state:` promoting the new wording and retiring the old in one
+verdict.
+
+**Forces.** Once the ledger survives the process (D-0019), a re-run is the
+normal case rather than an exotic one, and the two obvious behaviours are both
+wrong: appending everything again duplicates the corpus, and refusing to
+re-read freezes the ledger at whatever the documents said the first time. The
+second is what the code did, which meant the upstream copy was upstream in
+name only.
+
+**Identity lives in the envelope, not in a side table.** The stable name and
+the fingerprint go into `SourceRef.reference`, which already exists to say
+where a record came from. No new engine concept, no state carried between
+runs, and the provenance a reader sees is the same string the sync parses. A
+reference this keeper did not write parses to nothing and is left alone — the
+sync only claims what it can prove it wrote.
+
+**One editorial act, one verdict.** An edited record uses `Promote { retiring }`
+exactly as design/001 §3.1 intended: promoting the new wording *is* retiring
+the old, not two decisions that happen to agree.
+
+**Three things it reports and will not do.** A record that has vanished from
+the document stays as it is — deleting a paragraph is not a person retiring a
+decision, and the document no longer contains the words that would say so. A
+reworded *question* — a register row still open, or a hypothesis not yet scored
+— keeps the wording the ledger has, because the grammar can supersede a claim
+and has nothing to say about either of those (U-28); appending anyway would
+leave two live registered questions where the document asks one. And a claim a
+person has retired is not resurrected by the
+document still reading `promoted`; the disagreement is announced. Each of the
+three is a verdict, and verdicts are human acts.
+
+**The fingerprint is a change detector, not a tamper seal.** It is a
+non-cryptographic hash, deliberately: anyone who can craft a colliding edit to
+the document can also simply write what they like in it. Which is its own
+finding — see U-29.
+
+---
+
+## D-0022 · A clock that holds the line, and a log that outlives it
+
+```yaml
+id: D-0022
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: storage round — resolves U-22
+evidence: [design/001-data-model.md §3.2, docs/REGISTER.md]
+review_trigger: when more than one process writes one log, or when record-time
+  must be comparable across machines
+```
+
+**Assertion.** What `state_of_at` needs is that record-time never moves
+backwards within the log — not that it agrees with the wall clock. So a
+backwards clock step small enough to be clock discipline holds record-time at
+the last entry and counts the hold; a step large enough to mean the clock is
+simply wrong refuses, and the refusal names the moment appends resume. The
+check that a record may not claim a time later than now is an append-path
+guard and not a rule of the grammar, so replay does not apply it.
+
+**Forces.** The monotonicity guard was sound and had no way out: once the
+machine's clock stepped back, every append failed until the clock caught up,
+with nothing in the error to say so. Absorbing every backwards step would have
+been worse — stamping records from a clock known to be wrong buys convenience
+with provenance.
+
+**The larger half was invisible until durability existed.** A log whose entries
+were written before the clock stepped back reads, afterwards, as a log full of
+future record-times. Under the old rule replay refused every one of them, so a
+wrong clock did not cost the next few writes — it cost the whole store, which
+would not open at all. That is the actual repair here. Nothing is given up:
+replay still enforces monotonicity, which is the property the temporal reads
+rest on.
+
+**Surfaced, not corrected.** Opening a log that leads the clock reports how far
+by, because it is the one fact that explains the next refused append.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

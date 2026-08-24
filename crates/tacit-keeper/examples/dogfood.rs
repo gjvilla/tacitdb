@@ -327,10 +327,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    · the record now survives the process (D-0019): run the MCP host with");
     println!("      --store <path> and the ledger is replayed from an append-only log,");
     println!("      re-validated through the same grammar an append runs");
+    println!("    · and it stays current (D-0021): re-reading the documents is a sync, so an");
+    println!("      edited record supersedes and retires its predecessor in one verdict,");
+    println!("      while an unchanged one writes nothing at all");
     println!("  NOT yet met:");
-    println!("    · this example still uses a scratch in-memory ledger, and");
-    println!("      docs/DECISIONS.md remains the copy a person edits — the engine holds");
-    println!("      the corpus faithfully, but the document is still upstream of it");
+    println!("    · this example still uses a scratch in-memory ledger — the durable path");
+    println!("      is the host's, and this demo exercises the grammar rather than the store");
+    println!("    · docs/DECISIONS.md stays the copy a person edits. That is now a decision");
+    println!("      rather than a gap, and it has a cost worth naming: write access to that");
+    println!("      file is promotion authority, since the ingest transcribes `state:");
+    println!("      promoted` as a person\'s verdict and cannot know who typed it. There is");
+    println!("      no promote tool on the MCP surface; this is the side door (U-29)");
     println!();
     println!("  H-0001(b) — \"MCP tools let an agent answer why Tacit chose X with");
     println!("  provenance, and honestly abstain on registered unknowns\":");
@@ -345,8 +352,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Today: 11/14, four of those passes earned by declining to answer, and");
     println!("  three known shortfalls tracked against U-23 rather than hidden.");
     println!();
-    println!("  Scored honestly: (a) durable and re-validated, with the document still");
-    println!("  upstream; (b) capability met; (c) instrument exists and reports honestly.");
+    println!("  Scored honestly: (a) durable, re-validated, and current, with the document");
+    println!("  deliberately upstream and U-29 the price of that; (b) capability met;");
+    println!("  (c) instrument exists and reports honestly.");
     println!("  Retrieval quality (U-23) is the open work, not the grading.");
 
     println!();

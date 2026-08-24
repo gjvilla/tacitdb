@@ -9,7 +9,7 @@ use crate::measurement::MeasurementTarget;
 use crate::record::Draft;
 use crate::state::{ClaimState, RecordState};
 use crate::value::Value;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use std::path::PathBuf;
 
 /// A scratch path that cleans itself up.
@@ -306,4 +306,53 @@ fn writes_continue_after_a_reload() {
     let final_open = Ledger::open(scratch.path()).unwrap();
     assert_eq!(final_open.ledger.log().len(), 2);
     assert_eq!(final_open.ledger.entities().count(), 1, "the entity is not duplicated");
+}
+
+/// U-22 meets D-0019: a record-time held against a backwards clock is ahead of
+/// the wall clock, and replay must still accept it. This is the seam where the
+/// two guards could disagree — the append ceiling and the replay ceiling are
+/// the same expression precisely so they cannot.
+#[test]
+fn a_record_time_held_against_a_backwards_clock_survives_a_reload() {
+    let scratch = Scratch::new("clock-hold-reload");
+    let ahead = Timestamp::now() + SignedDuration::from_secs(3);
+
+    let held = {
+        let mut ledger = Ledger::open(scratch.path()).unwrap().ledger;
+        let subject = ledger.add_entity("process", "torque check").unwrap();
+        ledger.force_log_ahead_of_clock(ahead);
+        let id = ledger.append(claim(subject, "the torque check is a controlled step", Author::human("Greg"))).unwrap();
+        assert_eq!(ledger.clock_holds(), 1);
+        id
+    };
+
+    // Replay accepts a log that leads the clock, and says so rather than
+    // refusing. The refusal was the real cost of the old rule: a clock set back
+    // an hour did not block the next few appends, it made the whole store
+    // unopenable — every record in it now reading as "in the future".
+    let opened = Ledger::open(scratch.path()).unwrap();
+    assert_eq!(opened.ledger.record(held).unwrap().envelope().recorded_at(), ahead);
+    let leads = opened.recovery.leads_clock.expect("the log leads the clock");
+    assert!(leads.as_secs() > 0 && leads.as_secs() <= 3);
+
+    // Reads are unaffected; only minting a *new* record-time consults the clock.
+    assert_eq!(
+        opened.ledger.state_of(held),
+        Some(RecordState::Claim(ClaimState::Proposed))
+    );
+}
+
+/// The ordinary case, for contrast: a log written by a healthy clock reports
+/// nothing, so `leads_clock` is a signal and not noise.
+#[test]
+fn a_log_written_by_a_healthy_clock_reports_no_skew() {
+    let scratch = Scratch::new("clock-healthy");
+    {
+        let mut ledger = Ledger::open(scratch.path()).unwrap().ledger;
+        let subject = ledger.add_entity("process", "torque check").unwrap();
+        ledger.append(claim(subject, "the torque check is a controlled step", Author::human("Greg"))).unwrap();
+    }
+    let opened = Ledger::open(scratch.path()).unwrap();
+    assert!(opened.recovery.leads_clock.is_none());
+    assert_eq!(opened.ledger.clock_holds(), 0);
 }

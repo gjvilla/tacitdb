@@ -72,6 +72,8 @@ check that no record was written *about* it.
 | G-08 | what did the prior art survey conclude about building versus adopting | answer D-0008 (pending U-23) | Greg Villa | when a surveyed engine ships the wedge |
 | G-09 | which storage engine does the project use | abstain U-5 (pending U-23) | Greg Villa | when U-5 resolves |
 | G-10 | what licence will the engine ship under | abstain U-17 (pending U-23) | Greg Villa | when U-17 resolves |
+| G-15 | what happens in the ledger when a decision record is edited | answer D-0021 | Greg Villa | when the ingest stops being a sync |
+| G-16 | what does the engine do if the machine clock moves backwards | answer D-0022 | Greg Villa | when more than one process writes one log |
 | G-11 | how does sharding across geographic regions work | abstain | Greg Villa | never — this is outside the record by design |
 | G-12 | what is the maximum supported cluster size | abstain | Greg Villa | never — this is outside the record by design |
 | G-13 | how many concurrent writers does the store support | abstain | Greg Villa | when U-5 resolves |

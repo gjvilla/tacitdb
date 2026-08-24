@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use store::Store;
 use tacit_core::Ledger;
+use tacit_keeper::Disposition;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,6 +61,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         String::new()
                     }
                 );
+                // Said out loud rather than swallowed: it is the fact that
+                // explains the next refused append (U-22).
+                if let Some(ahead) = opened.recovery.leads_clock {
+                    eprintln!(
+                        "tacit-mcp: this machine's clock is {ahead} behind the log — record-time \
+                         holds at the last entry until it catches up"
+                    );
+                }
                 opened.ledger
             }
             Err(error) => {
@@ -70,21 +79,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => Ledger::new(),
     };
 
-    // Only load the corpus into a store that does not already hold it;
-    // re-ingesting would duplicate every record (U-19).
-    let already_loaded = !ledger.log().is_empty();
+    // The documents are upstream and the store is downstream, so every start
+    // is a sync: unchanged records write nothing, edited ones supersede what
+    // they replace, and what the ingest may not decide on its own is said out
+    // loud (U-19).
     match &corpus {
-        Some(_) if already_loaded => eprintln!(
-            "tacit-mcp: the store already holds {} records; not re-ingesting the corpus",
-            ledger.log().len()
-        ),
         Some(root) => match tacit_keeper::ingest_corpus(&mut ledger, root) {
-            Ok(report) => eprintln!(
-                "tacit-mcp: loaded {} decision records and {} register entries from {}",
-                report.decisions.len(),
-                report.gaps.len(),
-                root.display()
-            ),
+            Ok(report) => {
+                if report.unreadable_provenance {
+                    eprintln!(
+                        "tacit-mcp: this store holds records whose provenance this build \
+                         cannot read — a store written before D-0021. Everything below \
+                         landed as new, so the corpus is now in it twice. Start a fresh \
+                         store rather than living with the duplicate."
+                    );
+                }
+                eprintln!(
+                    "tacit-mcp: synced {} source records from {}: {} new, {} edited, {} \
+                     unchanged ({} records written)",
+                    report.dispositions.len(),
+                    root.display(),
+                    report.count(Disposition::Fresh),
+                    report.count(Disposition::Changed),
+                    report.count(Disposition::Unchanged),
+                    report.appended(),
+                );
+                // Three things the sync reports and will not act on, because
+                // each of them is a verdict and verdicts are human acts.
+                for id in &report.absent {
+                    eprintln!(
+                        "tacit-mcp:   {id} is in the store and gone from the document — \
+                         it stays as it is; retiring it is a person's verdict"
+                    );
+                }
+                for id in &report.drifted {
+                    eprintln!(
+                        "tacit-mcp:   {id} was reworded while still open — the store keeps \
+                         the wording it has (U-28)"
+                    );
+                }
+                for (id, state) in &report.refused {
+                    eprintln!(
+                        "tacit-mcp:   {id} reads `state: promoted` in the document and \
+                         {state} in the store — not resurrected"
+                    );
+                }
+            }
             Err(error) => {
                 eprintln!("tacit-mcp: could not load corpus from {}: {error}", root.display());
                 std::process::exit(1);

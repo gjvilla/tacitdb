@@ -22,6 +22,8 @@ pub struct ParsedUnknown {
     pub trigger: String,
     pub notes: String,
     pub resolved: Option<Resolution>,
+    /// The row exactly as written, so a re-ingest can tell whether it changed.
+    pub raw: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +87,7 @@ pub fn parse_register(text: &str) -> Result<Vec<ParsedUnknown>, ParseError> {
             trigger: cells[2].to_string(),
             notes: cells[3].to_string(),
             resolved,
+            raw: trimmed.to_string(),
         });
     }
     Ok(unknowns)

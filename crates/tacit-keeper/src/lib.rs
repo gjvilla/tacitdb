@@ -6,13 +6,15 @@
 
 pub mod corpus;
 pub mod golden;
+pub mod origin;
 pub mod parse;
 pub mod register;
 
 pub use corpus::{
-    DECISION_KIND, IngestError, IngestReport, MENTIONS, UNKNOWN_KIND, ingest_corpus,
-    ingest_decisions, ingest_text,
+    DECISION_KIND, DECISIONS_DOC, Disposition, IngestError, IngestReport, MENTIONS,
+    REGISTER_DOC, UNKNOWN_KIND, ingest_corpus, ingest_decisions, ingest_text,
 };
+pub use origin::Origin;
 pub use golden::{Expectation, GoldenQuestion, Graded, Scorecard, Verdict, parse_golden};
 pub use parse::{ParseError, ParsedRecord, parse_corpus};
 pub use register::{ParsedUnknown, Resolution, parse_register};

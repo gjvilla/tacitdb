@@ -25,7 +25,7 @@ use crate::envelope::{Author, Evidence, ReviewTrigger, SourceRef};
 use crate::error::Error;
 use crate::id::{EntityId, RecordId};
 use crate::measurement::MeasurementTarget;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -115,6 +115,11 @@ pub struct Recovery {
     /// discarding it restores the log to its last consistent state. Anything
     /// malformed *before* the end is corruption and refuses to load.
     pub truncated_bytes: u64,
+    /// How far the log's last record-time leads the wall clock, if it does.
+    /// Set by `Ledger::open` after replay. Present means the machine's clock
+    /// stepped backwards since the log was written: reads are unaffected, and
+    /// appends hold or refuse per U-22 until the clock catches up.
+    pub leads_clock: Option<SignedDuration>,
 }
 
 /// Read the log, discarding a torn final line, and hand back the events for
@@ -172,6 +177,7 @@ pub(crate) fn read(path: &Path) -> Result<(Vec<Event>, Journal, Recovery), Error
     }
 
     let journal = Journal::open_for_append(path)?;
-    let recovery = Recovery { events_replayed: events.len(), truncated_bytes };
+    let recovery =
+        Recovery { events_replayed: events.len(), truncated_bytes, leads_clock: None };
     Ok((events, journal, recovery))
 }

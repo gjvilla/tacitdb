@@ -10,17 +10,56 @@
 //! Bitemporal note: record-time is when this ledger learned the record (now,
 //! engine-assigned), and the document's own date becomes valid-time. Nothing
 //! is backdated and invariant 3 is untouched.
+//!
+//! Ingest is a **sync**, not a load (U-19). The documents are upstream and the
+//! ledger is downstream, so running this twice must not duplicate the corpus,
+//! and running it after an edit must carry the edit through. Each source record
+//! is fingerprinted into its own provenance ([`crate::origin`]), which lets a
+//! second run tell three cases apart:
+//!
+//! - **fresh** — the ledger has never seen it; append as usual.
+//! - **unchanged** — append nothing at all, and reuse what is already there.
+//! - **changed** — append a new claim superseding the old one, and let the
+//!   document's `state:` promote the new while retiring the old in one verdict,
+//!   which is exactly the transition design/001 §3.1 built `Promote { retiring }`
+//!   for.
+//!
+//! Two things the sync deliberately does *not* do, because both are verdicts
+//! and verdicts are human acts:
+//!
+//! - A record that has vanished from the document is **reported, not retired**.
+//!   Deleting a paragraph is not the same act as retiring a decision, and the
+//!   document no longer contains the words that would say so.
+//! - A reworded *question* — a register row still open, or a hypothesis not yet
+//!   scored — is **reported as drift**, and the ledger keeps the wording it
+//!   has. The grammar can supersede a claim and has no such path for a gap or a
+//!   hypothesis (U-28). Appending anyway would leave two live registered
+//!   questions where the document asks one, and inventing a verdict to retire
+//!   the first would be a design decision smuggled in as an implementation
+//!   detail.
+//!
+//! One loose end the sync accepts rather than hides: when an edit removes a
+//! cross-reference, the edge claiming it was there is not re-appended and so is
+//! never superseded. It stays exactly what it always was — an unratified machine
+//! proposal — and shows up where those belong, in the pending queue.
 
+use crate::origin::{Origin, digest};
 use crate::parse::{ParseError, ParsedRecord, mentioned_ids, parse_corpus, split_evidence};
 use crate::register::{ParsedUnknown, parse_register, register_owner};
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tacit_core::{
-    Author, ClaimContent, Content, Draft, EntityId, Evidence, GapContent, HypothesisContent,
-    Ledger, RecordId, ReviewTrigger, SourceRef, VerdictAction, VerdictContent,
+    Author, ClaimContent, ClaimState, Content, Draft, EntityId, Evidence, GapContent,
+    HypothesisContent, Ledger, RecordId, RecordState, ReviewTrigger, SourceRef, VerdictAction,
+    VerdictContent,
 };
+
+/// The two documents this ingester reads, named once so provenance and lookup
+/// cannot drift apart.
+pub const DECISIONS_DOC: &str = "docs/DECISIONS.md";
+pub const REGISTER_DOC: &str = "docs/REGISTER.md";
 
 /// Entity kind for a corpus record's identity anchor.
 pub const DECISION_KIND: &str = "decision";
@@ -67,6 +106,70 @@ pub enum IngestError {
     MissingRegisterOwner,
 }
 
+/// Whether a source record was new to the ledger, unchanged since the last
+/// ingest, or edited since. The three cases are what makes a re-ingest a sync
+/// rather than a duplication (U-19).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    Fresh,
+    Unchanged,
+    Changed,
+}
+
+/// What a previous ingest of the same documents left in the ledger.
+///
+/// Built by reading provenance back out of the records themselves, so the sync
+/// carries no state between runs beyond the ledger. A record whose reference
+/// this keeper did not write parses to nothing and is left alone — the sync
+/// only claims what it can prove it wrote.
+#[derive(Debug, Default)]
+struct Prior {
+    by_identity: BTreeMap<String, (RecordId, String)>,
+}
+
+impl Prior {
+    fn scan(ledger: &Ledger) -> Self {
+        let mut by_identity = BTreeMap::new();
+        // Log order, last wins: a source record edited twice is represented by
+        // its most recent ingest, which is the one a third edit supersedes.
+        for id in ledger.log() {
+            let Some(record) = ledger.record(*id) else { continue };
+            let Some(reference) = record.envelope().source().reference.as_deref() else {
+                continue;
+            };
+            let Some(origin) = Origin::parse(reference) else { continue };
+            by_identity.insert(origin.identity(), (*id, origin.digest));
+        }
+        Self { by_identity }
+    }
+
+    fn record(&self, origin: &Origin) -> Option<RecordId> {
+        self.by_identity.get(&origin.identity()).map(|(id, _)| *id)
+    }
+
+    fn disposition(&self, origin: &Origin) -> Disposition {
+        match self.by_identity.get(&origin.identity()) {
+            None => Disposition::Fresh,
+            Some((_, digest)) if *digest == origin.digest => Disposition::Unchanged,
+            Some(_) => Disposition::Changed,
+        }
+    }
+
+    /// Source records the ledger holds that this run never saw — present in a
+    /// past version of a document and gone from the current one.
+    fn absent(&self, seen: &BTreeSet<String>) -> Vec<String> {
+        self.by_identity
+            .keys()
+            .filter(|identity| !seen.contains(*identity))
+            .filter_map(|identity| identity.split_once('#'))
+            // Top-level source records only: a derived title or cross-reference
+            // disappears with its parent and is not separately missing.
+            .filter(|(_, key)| !key.contains('/'))
+            .map(|(_, key)| key.to_string())
+            .collect()
+    }
+}
+
 /// What one ingest run put into the ledger.
 #[derive(Debug, Default)]
 pub struct IngestReport {
@@ -83,15 +186,57 @@ pub struct IngestReport {
     pub evidence_links: usize,
     /// Forces vectors the split heuristic produced, for the keeper to check.
     pub proposed_forces: Vec<(String, Vec<String>)>,
+    /// One entry per source record considered, in document order.
+    pub dispositions: Vec<(String, Disposition)>,
+    /// Register rows reworded while their question is still open. The ledger
+    /// keeps the old wording, because the grammar has no supersession path for
+    /// a gap (U-28) and this ingester does not get to invent one.
+    pub drifted: Vec<String>,
+    /// Source records the ledger holds that the documents no longer contain.
+    /// Reported, never retired: retirement is a verdict, and a deletion is not
+    /// a person declaring one.
+    pub absent: Vec<String>,
+    /// Promotions the document asserts that the ledger declined, with the state
+    /// that declined them — a retired claim does not quietly come back.
+    pub refused: Vec<(String, String)>,
+    /// The ledger already held records and not one of them carried provenance
+    /// this sync could read. A store written before D-0021 is the likely
+    /// cause, and ingesting into it duplicates the corpus instead of syncing
+    /// it — so it is said out loud rather than discovered later. A store built
+    /// only from agent proposals looks the same and is harmless, which is why
+    /// this is a report and not an error.
+    pub unreadable_provenance: bool,
+    /// Records actually written this run.
+    written: usize,
 }
 
 impl IngestReport {
+    /// Records this run actually wrote. Not derivable from the id lists: on a
+    /// sync those name what the ledger *holds* for each source record, most of
+    /// which some earlier run wrote.
     pub fn appended(&self) -> usize {
-        self.content_claims.len()
-            + self.title_claims.len()
-            + self.mention_claims.len()
-            + self.gaps.len()
-            + self.verdicts.len()
+        self.written
+    }
+
+    pub fn count(&self, disposition: Disposition) -> usize {
+        self.dispositions.iter().filter(|(_, d)| *d == disposition).count()
+    }
+
+    pub fn with_disposition(&self, disposition: Disposition) -> Vec<&str> {
+        self.dispositions
+            .iter()
+            .filter(|(_, d)| *d == disposition)
+            .map(|(id, _)| id.as_str())
+            .collect()
+    }
+
+    /// Whether this run changed the ledger at all — what a caller needs to
+    /// decide between "the corpus is current" and "something moved".
+    pub fn quiet(&self) -> bool {
+        self.written == 0
+            && self.drifted.is_empty()
+            && self.refused.is_empty()
+            && !self.unreadable_provenance
     }
 
     pub fn decision(&self, id: &str) -> Option<EntityId> {
@@ -161,10 +306,20 @@ pub fn ingest_text(
         None => None,
     };
     let mut report = IngestReport::default();
+    // What an earlier run left behind, read back out of the records' own
+    // provenance. Empty for a fresh ledger, which is the common case and the
+    // one where every disposition below is `Fresh`.
+    let prior = Prior::scan(ledger);
+    report.unreadable_provenance = !ledger.log().is_empty() && prior.by_identity.is_empty();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    // New claim → the promoted claim it supersedes, for phase 3's single
+    // promote-and-retire verdict.
+    let mut retiring: BTreeMap<RecordId, RecordId> = BTreeMap::new();
 
     // Identity first, for both corpora, so a cross-reference resolves in
     // either direction: a decision naming U-1 and an unknown naming D-0012
-    // both find an anchor.
+    // both find an anchor. `upsert_entity` is already idempotent, so anchors
+    // need no sync of their own.
     for record in &parsed {
         let entity = ledger.upsert_entity(DECISION_KIND, &record.id)?;
         report.decisions.push((record.id.clone(), entity));
@@ -174,15 +329,50 @@ pub fn ingest_text(
         report.unknowns.push((unknown.id.clone(), entity));
     }
 
-    // Phase 1 — every decision record lands proposed.
+    // Phase 1 — every decision record lands proposed, unless the ledger
+    // already holds it word for word.
     for record in &parsed {
-        ingest_one(ledger, record, repo_root, &mut report)?;
+        let origin = Origin::new(DECISIONS_DOC, &record.id, &digest(&record.raw))
+            .noted(record.yaml.get("recorded").map(String::as_str));
+        let disposition = prior.disposition(&origin);
+        report.dispositions.push((record.id.clone(), disposition));
+        seen.insert(origin.identity());
+
+        // A hypothesis is a question the project has not yet scored, and the
+        // grammar can no more supersede one than it can supersede a gap. Same
+        // rule, same reason (U-28).
+        let unsupersedable = disposition == Disposition::Changed && record.id.starts_with('H');
+        if unsupersedable {
+            report.drifted.push(record.id.clone());
+        }
+        if disposition == Disposition::Unchanged || unsupersedable {
+            carry_forward(&prior, &origin, record, &mut seen, &mut report);
+            continue;
+        }
+        ingest_one(ledger, record, &origin, &prior, repo_root, &mut seen, &mut retiring, &mut report)?;
     }
 
     // Phase 2 — every register row lands as a registered gap.
     if let Some(author) = &register_author {
         for unknown in &unknowns {
-            ingest_gap(ledger, unknown, author, &mut report)?;
+            let origin = Origin::new(REGISTER_DOC, &unknown.id, &digest(&unknown.raw));
+            let disposition = prior.disposition(&origin);
+            report.dispositions.push((unknown.id.clone(), disposition));
+            seen.insert(origin.identity());
+
+            match disposition {
+                Disposition::Fresh => ingest_gap(ledger, unknown, &origin, author, &mut report)?,
+                // A reworded question and an answered one are different events,
+                // and the grammar can only express the second. Reported rather
+                // than forced (U-28).
+                other => {
+                    let gap = prior.record(&origin).expect("not fresh, so the ledger holds it");
+                    if other == Disposition::Changed {
+                        report.drifted.push(unknown.id.clone());
+                    }
+                    report.gaps.push((unknown.id.clone(), gap));
+                }
+            }
         }
     }
 
@@ -201,6 +391,25 @@ pub fn ingest_text(
                         .map(|(_, r)| *r),
                 ];
                 for target in targets.into_iter().flatten() {
+                    // On a sync most targets are already promoted by an earlier
+                    // run's transcription of the same line. Re-declaring a
+                    // verdict the ledger already holds is not idempotence, it
+                    // is a second act by a person who performed one.
+                    match ledger.state_of(target) {
+                        Some(RecordState::Claim(ClaimState::Proposed)) => {}
+                        Some(RecordState::Claim(ClaimState::Promoted)) => continue,
+                        Some(state) => {
+                            report.refused.push((record.id.clone(), state.to_string()));
+                            continue;
+                        }
+                        None => continue,
+                    }
+                    // A changed record is promoted and its predecessor retired
+                    // in one verdict — one editorial act, one transition pair
+                    // (design/001 §3.1).
+                    let retires = retiring.get(&target).copied().filter(|prior| {
+                        ledger.state_of(*prior) == Some(RecordState::Claim(ClaimState::Promoted))
+                    });
                     let verdict = ledger.append(Draft::new(
                         author.clone(),
                         SourceRef {
@@ -208,14 +417,24 @@ pub fn ingest_text(
                             reference: Some(format!("docs/DECISIONS.md {} state:", record.id)),
                         },
                         Content::Verdict(VerdictContent {
-                            action: VerdictAction::Promote { target, retiring: None },
-                            rationale: Some(format!(
-                                "transcribed from docs/DECISIONS.md: {} carries `state: promoted`",
-                                record.id
-                            )),
+                            action: VerdictAction::Promote { target, retiring: retires },
+                            rationale: Some(match retires {
+                                Some(_) => format!(
+                                    "transcribed from docs/DECISIONS.md: {} was edited and \
+                                     still carries `state: promoted`; the prior wording is \
+                                     retired as superseded",
+                                    record.id
+                                ),
+                                None => format!(
+                                    "transcribed from docs/DECISIONS.md: {} carries \
+                                     `state: promoted`",
+                                    record.id
+                                ),
+                            }),
                         }),
                     ))?;
                     report.verdicts.push(verdict);
+                    report.written += 1;
                 }
             }
             // A hypothesis is never promoted — it is scored, and this one is
@@ -237,6 +456,10 @@ pub fn ingest_text(
         for unknown in &unknowns {
             let Some(resolution) = &unknown.resolved else { continue };
             let gap = report.gap(&unknown.id).expect("gap appended in phase 2");
+            // Already settled by an earlier run's transcription of the same row.
+            if ledger.state_of(gap) != Some(RecordState::Gap(tacit_core::GapState::Registered)) {
+                continue;
+            }
             let settled_by = resolution.by.as_ref().and_then(|d| report.content_claim(d));
             let (action, rationale) = match (settled_by, &resolution.by) {
                 (Some(with_claim), Some(decision)) => (
@@ -264,13 +487,42 @@ pub fn ingest_text(
                 Content::Verdict(VerdictContent { action, rationale: Some(rationale) }),
             ))?;
             report.verdicts.push(verdict);
+            report.written += 1;
             if let Some(decision) = &resolution.by {
                 report.answered.push((unknown.id.clone(), decision.clone()));
             }
         }
     }
 
+    report.absent = prior.absent(&seen);
     Ok(report)
+}
+
+/// An unchanged source record: nothing is written, and the report points at
+/// what the ledger already holds so the later phases resolve exactly as they
+/// would have on a fresh run.
+fn carry_forward(
+    prior: &Prior,
+    origin: &Origin,
+    record: &ParsedRecord,
+    seen: &mut BTreeSet<String>,
+    report: &mut IngestReport,
+) {
+    if let Some(id) = prior.record(origin) {
+        report.content_claims.push((record.id.clone(), id));
+    }
+    let title = origin.role("title");
+    seen.insert(title.identity());
+    if let Some(id) = prior.record(&title) {
+        report.title_claims.push((record.id.clone(), id));
+    }
+    for other in mentioned_ids(&record.raw, &record.id) {
+        let edge = origin.role(&format!("mentions/{other}"));
+        seen.insert(edge.identity());
+        if let Some(id) = prior.record(&edge) {
+            report.mention_claims.push((record.id.clone(), other, id));
+        }
+    }
 }
 
 /// One register row becomes one gap: the question, the territory it covers,
@@ -280,6 +532,7 @@ pub fn ingest_text(
 fn ingest_gap(
     ledger: &mut Ledger,
     unknown: &ParsedUnknown,
+    origin: &Origin,
     author: &Author,
     report: &mut IngestReport,
 ) -> Result<(), IngestError> {
@@ -305,37 +558,36 @@ fn ingest_gap(
 
     let mut draft = Draft::new(
         author.clone(),
-        SourceRef {
-            channel: "register".into(),
-            reference: Some(format!("docs/REGISTER.md {}", unknown.id)),
-        },
+        SourceRef { channel: "register".into(), reference: Some(origin.to_string()) },
         Content::Gap(GapContent { question, territory }),
     );
     draft.review_trigger = review_trigger;
     let id = ledger.append(draft)?;
     report.gaps.push((unknown.id.clone(), id));
+    report.written += 1;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_one(
     ledger: &mut Ledger,
     record: &ParsedRecord,
+    origin: &Origin,
+    prior: &Prior,
     repo_root: &Path,
+    seen: &mut BTreeSet<String>,
+    retiring: &mut BTreeMap<RecordId, RecordId>,
     report: &mut IngestReport,
 ) -> Result<(), IngestError> {
     let subject = report.decision(&record.id).expect("anchor minted above");
     let author = Author::human(record.require("author")?);
-    let source = SourceRef {
-        channel: record.require("source")?.to_string(),
-        // The document's own stated record-time, preserved verbatim rather
-        // than backdating the ledger's.
-        reference: Some(format!(
-            "docs/DECISIONS.md {} recorded:{}",
-            record.id,
-            record.yaml.get("recorded").map(String::as_str).unwrap_or("—")
-        )),
-    };
+    let channel = record.require("source")?.to_string();
+    // The reference carries the document's own stated record-time verbatim
+    // rather than backdating the ledger's, and the digest that lets the next
+    // run recognise this record.
+    let source = SourceRef { channel: channel.clone(), reference: Some(origin.to_string()) };
     let valid_from = parse_date(record, "valid_from")?;
+
     let review_trigger = record.yaml.get("review_trigger").map(|prose| ReviewTrigger {
         due_at: None,
         on_event: Some(prose.clone()),
@@ -353,13 +605,18 @@ fn ingest_one(
     draft.valid_from = valid_from;
     draft.evidence = evidence;
     draft.review_trigger = review_trigger.clone();
+    draft.supersedes = prior.record(origin);
     let content_claim = ledger.append(draft)?;
     report.content_claims.push((record.id.clone(), content_claim));
+    report.written += 1;
+    note_supersession(ledger, prior, origin, content_claim, retiring);
 
     // The heading title, transcribed verbatim as a node property.
+    let title_origin = origin.role("title");
+    seen.insert(title_origin.identity());
     let mut title = Draft::new(
         author.clone(),
-        source.clone(),
+        SourceRef { channel: channel.clone(), reference: Some(title_origin.to_string()) },
         Content::Claim(ClaimContent::Attribute {
             subject,
             name: "title".into(),
@@ -367,17 +624,22 @@ fn ingest_one(
         }),
     );
     title.valid_from = valid_from;
+    title.supersedes = prior.record(&title_origin);
     let title_claim = ledger.append(title)?;
     report.title_claims.push((record.id.clone(), title_claim));
+    report.written += 1;
+    note_supersession(ledger, prior, &title_origin, title_claim, retiring);
 
     // Cross-references, as observed: this record's text names that record.
     // These stay *proposed* — no human has ratified the machine's reading, so
     // the default graph shows no edges until someone does.
     for other in mentioned_ids(&record.raw, &record.id) {
+        let edge_origin = origin.role(&format!("mentions/{other}"));
+        seen.insert(edge_origin.identity());
         let Some(object) = report.anchor(&other) else { continue };
         let mut edge = Draft::new(
             Author::agent("corpus-ingest"),
-            source.clone(),
+            SourceRef { channel: channel.clone(), reference: Some(edge_origin.to_string()) },
             Content::Claim(ClaimContent::Relation {
                 subject,
                 predicate: MENTIONS.into(),
@@ -386,11 +648,31 @@ fn ingest_one(
             }),
         );
         edge.valid_from = valid_from;
+        edge.supersedes = prior.record(&edge_origin);
         let id = ledger.append(edge)?;
         report.mention_claims.push((record.id.clone(), other, id));
+        report.written += 1;
     }
 
     Ok(())
+}
+
+/// Note the promoted claim a new claim replaces, so phase 3 can promote the
+/// new and retire the old in one verdict. Only a *promoted* predecessor is
+/// recorded: retiring is a transition out of the promoted set, and a claim
+/// that never entered it has nothing to leave.
+fn note_supersession(
+    ledger: &Ledger,
+    prior: &Prior,
+    at: &Origin,
+    new: RecordId,
+    retiring: &mut BTreeMap<RecordId, RecordId>,
+) {
+    if let Some(old) = prior.record(at)
+        && ledger.state_of(old) == Some(RecordState::Claim(ClaimState::Promoted))
+    {
+        retiring.insert(new, old);
+    }
 }
 
 fn build_content(record: &ParsedRecord, subject: EntityId) -> Result<Content, IngestError> {
@@ -582,6 +864,274 @@ mod tests {
     fn parsed() -> Vec<crate::parse::ParsedRecord> {
         let text = std::fs::read_to_string(repo_root().join("docs/DECISIONS.md")).unwrap();
         crate::parse::parse_corpus(&text).unwrap()
+    }
+
+
+    // ── U-19: ingest is a sync, not a load ──────────────────────────────────
+
+    /// A corpus small enough that every append is countable and every edit is
+    /// deliberate. The real documents exercise scale; these exercise identity.
+    fn decisions_doc(records: &[(&str, &str)]) -> String {
+        let mut doc = String::new();
+        for (id, assertion) in records {
+            doc.push_str(&format!(
+                "## {id} · The forces driving the build\n\n\
+                 ```yaml\n\
+                 id: {id}\n\
+                 state: promoted\n\
+                 author: Greg Villa\n\
+                 source: founding-interview / round 1\n\
+                 recorded: 2026-08-22\n\
+                 valid_from: 2026-08-22\n\
+                 ```\n\n\
+                 **Assertion.** {assertion}\n\n"
+            ));
+        }
+        doc
+    }
+
+    fn register_doc(note: &str) -> String {
+        format!(
+            "## Room 2 · Known unknowns\n\n\
+             | id | Question | Trigger | Notes |\n\
+             |----|----------|---------|-------|\n\
+             | U-1 | Whether a query language is needed | first agent usage | {note} |\n\n\
+             *Recorded 2026-08-23. Owner: Greg Villa.*\n"
+        )
+    }
+
+    #[test]
+    fn re_ingesting_an_unchanged_corpus_writes_nothing() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        let first = ingest_corpus(&mut ledger, &root).expect("first ingest");
+        let length = ledger.log().len();
+        assert!(first.appended() > 0);
+        assert_eq!(first.count(Disposition::Unchanged), 0, "a fresh ledger holds nothing");
+
+        let second = ingest_corpus(&mut ledger, &root).expect("second ingest");
+        assert_eq!(second.appended(), 0, "the same documents twice write nothing");
+        assert_eq!(ledger.log().len(), length, "and the log is exactly as long");
+        assert!(second.quiet());
+        assert_eq!(second.count(Disposition::Fresh), 0);
+        assert!(second.absent.is_empty() && second.drifted.is_empty());
+
+        // The report still resolves, which is what the later phases need: they
+        // must find the ids of records this run did not write.
+        assert_eq!(second.content_claims.len(), first.content_claims.len());
+        assert_eq!(second.gaps.len(), first.gaps.len());
+        assert_eq!(second.content_claim("D-0001"), first.content_claim("D-0001"));
+        assert_eq!(
+            ledger.state_of(second.content_claim("D-0001").unwrap()),
+            Some(RecordState::Claim(ClaimState::Promoted))
+        );
+    }
+
+    #[test]
+    fn an_edited_record_supersedes_its_predecessor_and_retires_it() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        let before = ingest_text(
+            &mut ledger,
+            &decisions_doc(&[("D-0001", "Four forces jointly motivate the build.")]),
+            None,
+            &root,
+        )
+        .expect("first ingest");
+        let old = before.content_claim("D-0001").unwrap();
+        assert_eq!(ledger.state_of(old), Some(RecordState::Claim(ClaimState::Promoted)));
+
+        let after = ingest_text(
+            &mut ledger,
+            &decisions_doc(&[("D-0001", "Five forces jointly motivate the build.")]),
+            None,
+            &root,
+        )
+        .expect("second ingest");
+        let new = after.content_claim("D-0001").unwrap();
+
+        assert_eq!(after.count(Disposition::Changed), 1);
+        assert_ne!(new, old);
+        assert_eq!(ledger.record(new).unwrap().envelope().supersedes(), Some(old));
+        assert_eq!(ledger.state_of(new), Some(RecordState::Claim(ClaimState::Promoted)));
+        assert_eq!(ledger.state_of(old), Some(RecordState::Claim(ClaimState::Retired)));
+
+        // One editorial act, one verdict: promoting the new wording *is*
+        // retiring the old (design/001 §3.1), not two decisions that happen to
+        // agree.
+        let promoting = ledger.history(new);
+        assert_eq!(promoting.len(), 1);
+        assert_eq!(promoting[0].id(), ledger.history(old)[1].id());
+    }
+
+    #[test]
+    fn a_record_dropped_from_the_document_is_reported_not_retired() {
+        let root = repo_root();
+        let both = decisions_doc(&[("D-0001", "Four forces."), ("D-0002", "Two layers.")]);
+        let one = decisions_doc(&[("D-0001", "Four forces.")]);
+
+        let mut ledger = Ledger::new();
+        let before = ingest_text(&mut ledger, &both, None, &root).expect("first ingest");
+        let dropped = before.content_claim("D-0002").unwrap();
+
+        let after = ingest_text(&mut ledger, &one, None, &root).expect("second ingest");
+        assert_eq!(after.absent, vec!["D-0002".to_string()]);
+        assert_eq!(after.appended(), 0);
+        // Deleting a paragraph is not a person retiring a decision, and the
+        // document no longer contains the words that would say so.
+        assert_eq!(ledger.state_of(dropped), Some(RecordState::Claim(ClaimState::Promoted)));
+        assert!(!after.quiet() || !after.absent.is_empty());
+    }
+
+    #[test]
+    fn a_reworded_hypothesis_is_reported_as_drift_like_a_reworded_question() {
+        let root = repo_root();
+        let doc = |statement: &str| {
+            format!(
+                "## H-0001 · Success hypothesis\n\n\
+                 ```yaml\n\
+                 id: H-0001\n\
+                 state: registered\n\
+                 author: Greg Villa\n\
+                 source: founding-interview / round 3\n\
+                 recorded: 2026-08-22\n\
+                 score_by: 2027-02-22\n\
+                 ```\n\n\
+                 **Hypothesis.** {statement}\n\n"
+            )
+        };
+        let mut ledger = Ledger::new();
+        let before = ingest_text(&mut ledger, &doc("Within six months it self-hosts."), None, &root)
+            .expect("first ingest");
+        let original = before.content_claim("H-0001").unwrap();
+
+        let after = ingest_text(&mut ledger, &doc("Within nine months it self-hosts."), None, &root)
+            .expect("second ingest");
+        assert_eq!(after.drifted, vec!["H-0001".to_string()]);
+        assert_eq!(after.appended(), 0, "two live registered hypotheses is not an improvement");
+        assert_eq!(after.content_claim("H-0001"), Some(original));
+    }
+
+    #[test]
+    fn a_reworded_open_register_row_is_reported_as_drift() {
+        let root = repo_root();
+        let decisions = decisions_doc(&[("D-0001", "Four forces.")]);
+        let mut ledger = Ledger::new();
+
+        let before = ingest_text(
+            &mut ledger,
+            &decisions,
+            Some(&register_doc("deferred, not rejected")),
+            &root,
+        )
+        .expect("first ingest");
+        let gap = before.gap("U-1").unwrap();
+
+        let after = ingest_text(
+            &mut ledger,
+            &decisions,
+            Some(&register_doc("deferred until real agent usage exists")),
+            &root,
+        )
+        .expect("second ingest");
+
+        assert_eq!(after.drifted, vec!["U-1".to_string()]);
+        assert_eq!(after.appended(), 0);
+        // The ledger keeps the wording it has. Withdrawing the old question
+        // would say the project stopped asking it, which is not what happened
+        // — and the grammar has no third thing to say (U-28).
+        assert_eq!(after.gap("U-1"), Some(gap));
+        assert!(!after.quiet(), "drift is not silence");
+    }
+
+    #[test]
+    fn a_retired_claim_is_reported_not_resurrected() {
+        let root = repo_root();
+        let doc = decisions_doc(&[("D-0001", "Four forces.")]);
+        let mut ledger = Ledger::new();
+        let before = ingest_text(&mut ledger, &doc, None, &root).expect("first ingest");
+        let claim = before.content_claim("D-0001").unwrap();
+
+        // A person retires it in the ledger while the document still says
+        // `state: promoted` — the two disagree, which is drift and not an error.
+        ledger
+            .append(Draft::new(
+                Author::human("Greg Villa"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Retire {
+                        target: claim,
+                        reason: tacit_core::RetireReason::NoLongerTrue,
+                    },
+                    rationale: None,
+                }),
+            ))
+            .expect("retire");
+
+        let after = ingest_text(&mut ledger, &doc, None, &root).expect("second ingest");
+        assert_eq!(ledger.state_of(claim), Some(RecordState::Claim(ClaimState::Retired)));
+        assert!(
+            after.refused.iter().any(|(id, state)| id == "D-0001" && state.contains("Retired")),
+            "the sync reports the disagreement rather than re-promoting: {:?}",
+            after.refused
+        );
+        assert!(!after.quiet());
+    }
+
+    #[test]
+    fn a_store_this_sync_cannot_read_says_so_instead_of_duplicating_quietly() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity(DECISION_KIND, "D-0001").unwrap();
+        // A record with provenance from somewhere else entirely — the shape a
+        // store written before D-0021 has, and the shape an agent's own
+        // proposals have.
+        ledger
+            .append(Draft::new(
+                Author::agent("some-agent"),
+                SourceRef {
+                    channel: "conversation".into(),
+                    reference: Some("docs/DECISIONS.md D-0001 recorded:2026-08-22".into()),
+                },
+                Content::Claim(ClaimContent::Text { body: "four forces".into(), about: vec![subject] }),
+            ))
+            .expect("append");
+
+        let report = ingest_text(&mut ledger, &decisions_doc(&[("D-0001", "Four forces.")]), None, &root)
+            .expect("ingest");
+        assert!(report.unreadable_provenance);
+        assert!(!report.quiet(), "a silent duplication is the failure being reported");
+
+        // And a fresh ledger, which is the ordinary case, says nothing.
+        let mut clean = Ledger::new();
+        let ordinary =
+            ingest_text(&mut clean, &decisions_doc(&[("D-0001", "Four forces.")]), None, &root)
+                .expect("ingest");
+        assert!(!ordinary.unreadable_provenance);
+    }
+
+    /// The case U-19 was actually about: the store outlives the process, so the
+    /// next run opens a ledger that already holds the corpus. This is what the
+    /// MCP host does on every restart.
+    #[test]
+    fn a_durable_store_syncs_the_document_instead_of_duplicating_it() {
+        let root = repo_root();
+        let path = std::env::temp_dir().join(format!("tacit-sync-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let written = {
+            let mut ledger = Ledger::open(&path).expect("open").ledger;
+            ingest_corpus(&mut ledger, &root).expect("first ingest").appended()
+        };
+
+        let mut ledger = Ledger::open(&path).expect("reopen").ledger;
+        assert_eq!(ledger.log().len(), written, "the whole corpus replayed");
+        let report = ingest_corpus(&mut ledger, &root).expect("second ingest");
+        assert_eq!(report.appended(), 0, "a restart is not a second corpus");
+        assert_eq!(ledger.log().len(), written);
+        assert_eq!(report.count(Disposition::Unchanged), report.dispositions.len());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

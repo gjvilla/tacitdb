@@ -8,12 +8,22 @@ use crate::measurement::{Measurement, MeasurementTarget};
 use crate::record::{Draft, Record};
 use crate::state::{ClaimState, GapState, HypothesisState, RecordState};
 use crate::envelope::ENVELOPE_VERSION;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The kind reserved for entities that evidence may point at.
 pub const SOURCE_KIND: &str = "source";
+
+/// How far the wall clock may step backwards and still be treated as clock
+/// discipline rather than a wrong clock (U-22).
+///
+/// NTP corrections on a running machine are milliseconds to seconds, and a
+/// leap second is smeared. A backwards step of minutes or more is a different
+/// event — a manual change, a restored snapshot, a dead RTC, a timezone bug —
+/// and continuing to stamp records from a clock known to be wrong is worse
+/// than refusing to write.
+const CLOCK_HOLD_TOLERANCE: SignedDuration = SignedDuration::from_mins(5);
 
 /// The ledger: the governed record store, the entity registry, and the
 /// instrument panel.
@@ -35,6 +45,11 @@ pub struct Ledger {
     panel: BTreeMap<(MeasurementTarget, String), Measurement>,
     /// When present, every write is on disk before it is in memory.
     journal: Option<Journal>,
+    /// How many appends have held record-time at `last_recorded_at` because
+    /// the wall clock had stepped backwards. Not zero means the machine's
+    /// clock moved and the ledger absorbed it — worth surfacing, never worth
+    /// silently discarding.
+    clock_holds: u64,
 }
 
 /// A ledger opened from disk, with what recovery had to do to get there.
@@ -122,7 +137,45 @@ impl Ledger {
     // ── The governed ledger ─────────────────────────────────────────────────
 
     pub fn append(&mut self, draft: Draft) -> Result<RecordId, Error> {
-        self.append_at(draft, Timestamp::now())
+        let (recorded_at, held) = self.next_record_time()?;
+        let id = self.append_at(draft, recorded_at)?;
+        self.clock_holds += u64::from(held);
+        Ok(id)
+    }
+
+    /// The record-time this append will carry, and whether the clock had to be
+    /// held to produce it.
+    ///
+    /// The invariant `state_of_at` depends on is monotonicity, not agreement
+    /// with the wall clock, so a backwards step inside the tolerance holds the
+    /// line at the last record-time rather than failing. Beyond it, the append
+    /// refuses — and the error names the moment appends resume, because a
+    /// guard with no stated way out is the whole of U-22's complaint.
+    fn next_record_time(&self) -> Result<(Timestamp, bool), Error> {
+        let now = Timestamp::now();
+        let Some(last) = self.last_recorded_at else { return Ok((now, false)) };
+        if now >= last {
+            return Ok((now, false));
+        }
+        let behind = last.duration_since(now);
+        if behind > CLOCK_HOLD_TOLERANCE {
+            return Err(Error::ClockWentBackwards { now, last, behind });
+        }
+        Ok((last, true))
+    }
+
+    /// Appends that held the line against a backwards clock step.
+    pub fn clock_holds(&self) -> u64 {
+        self.clock_holds
+    }
+
+    /// Put the ledger in the state a machine whose clock has just stepped
+    /// backwards is in: the log leads the wall clock. Test-only, because
+    /// `append_at` cannot produce it — no record is ever written ahead of the
+    /// clock, so the only way the log can lead is for the clock to have moved.
+    #[cfg(test)]
+    pub(crate) fn force_log_ahead_of_clock(&mut self, recorded_at: Timestamp) {
+        self.last_recorded_at = Some(recorded_at);
     }
 
     /// Append with an explicit record-time. Deliberately not public: invariant
@@ -134,6 +187,23 @@ impl Ledger {
         draft: Draft,
         recorded_at: Timestamp,
     ) -> Result<RecordId, Error> {
+        // A record may not claim a time later than now — except to hold the
+        // line at a record-time this ledger has already issued, which is how a
+        // backwards clock step is absorbed without breaking monotonicity.
+        //
+        // This is an append-path guard and lives here rather than in
+        // `validate`, because it is not a grammar rule. Replay deliberately
+        // does not apply it: a log written before the clock stepped backwards
+        // legitimately leads the clock, and refusing to open it would make a
+        // wrong clock cost the whole store rather than the next few writes.
+        // Nothing is given up — what `state_of_at` needs is monotonicity
+        // within the log, and replay still enforces that.
+        let now = Timestamp::now();
+        let ceiling = self.last_recorded_at.map_or(now, |last| last.max(now));
+        if recorded_at > ceiling {
+            return Err(Error::FutureRecordTime { proposed: recorded_at, now });
+        }
+
         self.validate(&draft, recorded_at)?;
         let id = RecordId::mint();
         self.write(id, draft, recorded_at, ENVELOPE_VERSION)
@@ -142,10 +212,6 @@ impl Ledger {
     /// Every check an append runs, with nothing mutated. Replay calls this too,
     /// which is what makes a loaded ledger as trustworthy as a live one.
     fn validate(&self, draft: &Draft, recorded_at: Timestamp) -> Result<(), Error> {
-        let now = Timestamp::now();
-        if recorded_at > now {
-            return Err(Error::FutureRecordTime { proposed: recorded_at, now });
-        }
         if let Some(last) = self.last_recorded_at
             && recorded_at < last
         {
@@ -269,12 +335,20 @@ impl Ledger {
     /// because promotion is not a field — it is a fold over verdicts, and a
     /// forged verdict still has to be legal.
     pub fn open(path: impl AsRef<Path>) -> Result<Opened, Error> {
-        let (events, journal, recovery) = crate::journal::read(path.as_ref())?;
+        let (events, journal, mut recovery) = crate::journal::read(path.as_ref())?;
         let mut ledger = Ledger::new();
         for event in events {
             ledger.replay(event)?;
         }
         ledger.journal = Some(journal);
+        // Surfaced, not corrected: a log ahead of the clock means the machine's
+        // clock moved, and a caller that silently swallowed that would be
+        // hiding the one fact that explains the next refused append (U-22).
+        let now = Timestamp::now();
+        recovery.leads_clock = ledger
+            .last_recorded_at
+            .filter(|last| *last > now)
+            .map(|last| last.duration_since(now));
         Ok(Opened { ledger, recovery })
     }
 
@@ -1015,6 +1089,49 @@ mod tests {
             .append_at(attribute_claim(subject, Author::human("Greg")), future)
             .unwrap_err();
         assert!(matches!(err, Error::FutureRecordTime { .. }));
+    }
+
+    // ── U-22: a clock that steps backwards ──────────────────────────────────
+    //
+    // Both tests start by setting `last_recorded_at` ahead of the wall clock
+    // directly. That state cannot be produced through `append_at` — which is
+    // exactly the point: no record is ever written ahead of the clock, so the
+    // only way the log can lead is for the clock to have moved.
+
+    #[test]
+    fn a_small_backwards_clock_step_holds_the_line() {
+        let (mut ledger, _, subject) = setup();
+        let ahead = Timestamp::now() + SignedDuration::from_secs(2);
+        ledger.last_recorded_at = Some(ahead);
+
+        let first = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+        let second = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+
+        // Monotone, not strictly increasing: the line holds rather than the
+        // append failing, because what `state_of_at` needs is order, not
+        // agreement with the wall clock.
+        assert_eq!(ledger.record(first).unwrap().envelope().recorded_at(), ahead);
+        assert_eq!(ledger.record(second).unwrap().envelope().recorded_at(), ahead);
+        assert_eq!(ledger.clock_holds(), 2);
+    }
+
+    #[test]
+    fn a_large_backwards_clock_step_refuses_and_names_the_way_out() {
+        let (mut ledger, _, subject) = setup();
+        let ahead = Timestamp::now() + SignedDuration::from_hours(1);
+        ledger.last_recorded_at = Some(ahead);
+
+        let err = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap_err();
+        assert!(matches!(err, Error::ClockWentBackwards { .. }));
+        // U-22 was not "it refuses" — it was "it refuses with no way out".
+        assert!(err.to_string().contains("appends resume once it passes"));
+        assert_eq!(ledger.clock_holds(), 0);
+        assert!(ledger.log().is_empty());
+
+        // And the refusal is a pause, not a brick: the same append succeeds
+        // once the clock is back in front of the log.
+        ledger.last_recorded_at = Some(Timestamp::now() - SignedDuration::from_secs(1));
+        ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
     }
 
     #[test]
