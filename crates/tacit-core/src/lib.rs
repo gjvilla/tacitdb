@@ -19,6 +19,7 @@ mod projection;
 #[cfg(test)]
 mod proptests;
 mod record;
+mod retrieval;
 mod state;
 mod validity;
 mod value;
@@ -40,6 +41,10 @@ pub use projection::{
     PropertyClaim, StateFilter, ViewSpec,
 };
 pub use record::{Draft, Record};
+pub use retrieval::{
+    Budget, Direction, Expansion, Fusion, Item, Outcome, Query, Retrieved, Retriever, TextIndex,
+    Via, fuse, indexable_text, tokenize,
+};
 pub use state::{ClaimState, GapState, HypothesisState, RecordState};
 pub use validity::Validity;
 pub use value::Value;

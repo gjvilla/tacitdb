@@ -13,6 +13,7 @@ use crate::envelope::{Author, SourceRef};
 use crate::id::{EntityId, RecordId};
 use crate::ledger::MemoryLedger;
 use crate::projection::{Projection, StateFilter, ViewSpec};
+use crate::retrieval::{Outcome, Query, TextIndex};
 use crate::record::Draft;
 use crate::state::RecordState;
 use crate::value::Value;
@@ -57,6 +58,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
 struct Interpreter {
     ledger: MemoryLedger,
     incremental: Projection,
+    index: TextIndex,
     entities: Vec<EntityId>,
     claims: Vec<RecordId>,
     clock: i64,
@@ -67,6 +69,7 @@ impl Interpreter {
         Self {
             ledger: MemoryLedger::new(),
             incremental: Projection::empty(),
+            index: TextIndex::empty(),
             entities: Vec::new(),
             claims: Vec::new(),
             clock: 0,
@@ -87,6 +90,7 @@ impl Interpreter {
         for op in ops {
             self.step(op);
             self.incremental.advance(&self.ledger);
+            self.index.advance(&self.ledger);
         }
     }
 
@@ -279,5 +283,47 @@ proptest! {
             prop_assert!(property.claims().len() >= 2);
             prop_assert!(property.is_conflicted());
         }
+    }
+}
+
+proptest! {
+    /// The text index is a derived artifact under the same discipline as the
+    /// projection: interleaved maintenance equals a single end-to-end fold.
+    #[test]
+    fn index_incremental_equals_rebuild(ops in prop::collection::vec(op_strategy(), 0..60)) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        prop_assert_eq!(&interp.index, &TextIndex::rebuild(&interp.ledger));
+        prop_assert_eq!(interp.index.advance(&interp.ledger), 0);
+    }
+
+    /// Retrieval is a pure read and never outruns its budget; and whatever the
+    /// default view returns, it returns only records that view admits.
+    #[test]
+    fn retrieval_respects_budget_and_filter(ops in prop::collection::vec(op_strategy(), 0..50)) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        let before = interp.index.clone();
+        let spec = ViewSpec::now();
+        let retriever = interp.index.retriever(&interp.ledger, &interp.incremental, spec);
+        let view = retriever.view();
+
+        for text in ["attr0", "ctx body q", "p0 f s"] {
+            let found = retriever.retrieve(&Query::text(text));
+            prop_assert!(found.items.len() <= 10);
+            for item in &found.items {
+                prop_assert!(
+                    view.admits_record(item.record.id()),
+                    "returned a record the view does not admit"
+                );
+            }
+            for gap in &found.gaps {
+                prop_assert!(view.admits_record(gap.id()));
+            }
+            // An empty result set is exactly the None outcome, never a silent
+            // claim of confidence.
+            prop_assert_eq!(found.items.is_empty(), found.outcome == Outcome::None);
+        }
+        prop_assert_eq!(&before, &interp.index);
     }
 }

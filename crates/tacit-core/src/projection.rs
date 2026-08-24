@@ -28,7 +28,7 @@ use crate::id::{EntityId, RecordId};
 use crate::ledger::MemoryLedger;
 use crate::measurement::{Measurement, MeasurementTarget};
 use crate::record::Record;
-use crate::state::{ClaimState, GapState, RecordState};
+use crate::state::{ClaimState, GapState, HypothesisState, RecordState};
 use crate::validity::Validity;
 use crate::value::Value;
 use jiff::Timestamp;
@@ -329,15 +329,7 @@ impl<'a> GraphView<'a> {
     }
 
     fn admits(&self, slot: &Slot) -> bool {
-        if slot.recorded_at > self.spec.record_time {
-            return false;
-        }
-        if let Some(kind) = self.spec.author_kind
-            && slot.author_kind != kind
-        {
-            return false;
-        }
-        if !slot.validity.contains(self.spec.valid_at) {
+        if !self.admits_envelope(slot) {
             return false;
         }
         self.state_at(slot.record).is_some_and(|s| self.spec.states.admits(s))
@@ -450,11 +442,8 @@ impl<'a> GraphView<'a> {
         }
     }
 
-    /// A gap has no claim state, so `admits` cannot judge it — but every other
-    /// predicate still applies. Dropping the whole of `admits` here once meant
-    /// answered and withdrawn gaps stayed in the graph forever and the author
-    /// filter silently did not apply to them.
-    fn admits_gap(&self, slot: &Slot) -> bool {
+    /// The envelope predicates every record kind shares.
+    fn admits_envelope(&self, slot: &Slot) -> bool {
         if slot.recorded_at > self.spec.record_time {
             return false;
         }
@@ -463,7 +452,15 @@ impl<'a> GraphView<'a> {
         {
             return false;
         }
-        if !slot.validity.contains(self.spec.valid_at) {
+        slot.validity.contains(self.spec.valid_at)
+    }
+
+    /// A gap and a hypothesis have no *claim* state, so the claim state filter
+    /// cannot judge them — but every other predicate still applies. Dropping
+    /// the whole of `admits` for gaps once meant answered and withdrawn ones
+    /// stayed in the graph forever and the author filter silently skipped them.
+    fn admits_gap(&self, slot: &Slot) -> bool {
+        if !self.admits_envelope(slot) {
             return false;
         }
         match self.ledger.state_of_at(slot.record, self.spec.record_time) {
@@ -471,7 +468,25 @@ impl<'a> GraphView<'a> {
             // ones are history, and only the forensic view keeps them.
             Some(RecordState::Gap(GapState::Registered)) => true,
             Some(RecordState::Gap(_)) => self.spec.states == StateFilter::All,
+            // Same shape for a hypothesis: registered is live, scored is history.
+            Some(RecordState::Hypothesis(HypothesisState::Registered)) => true,
+            Some(RecordState::Hypothesis(_)) => self.spec.states == StateFilter::All,
             _ => false,
+        }
+    }
+
+    /// Whether this view admits a record, whatever its kind. The single
+    /// admission predicate: retrieval and the projected graph must never
+    /// disagree about what a view contains.
+    pub(crate) fn admits_record(&self, id: RecordId) -> bool {
+        let Some(record) = self.ledger.record(id) else { return false };
+        let slot = Slot::of(record, 0);
+        match record.content() {
+            Content::Claim(_) => self.admits(&slot),
+            Content::Gap(_) | Content::Hypothesis(_) => self.admits_gap(&slot),
+            // A verdict is the mechanism of state change, not content to
+            // retrieve or traverse; its provenance is read through `history`.
+            Content::Verdict(_) => false,
         }
     }
 
@@ -482,13 +497,7 @@ impl<'a> GraphView<'a> {
             .get(&entity)
             .into_iter()
             .flatten()
-            .filter(|slot| {
-                let Some(rec) = self.ledger.record(slot.record) else { return false };
-                match rec.content() {
-                    Content::Gap(_) => self.admits_gap(slot),
-                    _ => self.admits(slot),
-                }
-            })
+            .filter(|slot| self.admits_record(slot.record))
             .filter_map(|slot| self.ledger.record(slot.record))
             .collect()
     }

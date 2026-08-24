@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tacit_core::{
     Author, ClaimContent, Content, CostSpec, CostTransform, MeasurementTarget, MemoryLedger,
-    MissingCost, Projection, RecordState, StateFilter, ViewSpec,
+    MissingCost, Projection, Query, RecordState, StateFilter, TextIndex, Via, ViewSpec,
 };
 use tacit_keeper::corpus::{DECISION_KIND, ingest_corpus};
 
@@ -92,6 +92,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    · {}", truncate(force, 88));
         }
     }
+
+    rule("RETRIEVAL — one plan: filter, rank, expand, abstain");
+    let index = TextIndex::rebuild(&ledger);
+    let projection_for_search = Projection::rebuild(&ledger);
+    let retriever = index.retriever(&ledger, &projection_for_search, ViewSpec::now());
+    println!("  {} indexed records (verdicts contribute nothing)", index.documents());
+
+    for question in [
+        "why is the runtime embedded rather than a server",
+        "what storage engine does Tacit use",
+        "how does the vector index handle sharding across regions",
+    ] {
+        let found = retriever.retrieve(&Query::text(question));
+        println!("\n  ? {question}");
+        println!("    tags: {}", found.tags().join(" + "));
+        for item in found.items.iter().take(2) {
+            let label = anchor_label(&ledger, item.record);
+            let via = match &item.via {
+                Via::Lexical => "lexical".to_string(),
+                Via::Expanded { path, .. } => format!("expanded {} hop(s)", path.len()),
+            };
+            println!("    -> {label} (relevance {:.2}, {via})", item.relevance);
+        }
+        for gap in found.gaps.iter().take(2) {
+            let Content::Gap(content) = gap.content() else { continue };
+            let question = content.question.split("\n\n").next().unwrap_or_default();
+            println!("    open question: {}", truncate(question, 78));
+        }
+        if found.is_abstention() && found.items.is_empty() && found.gaps.is_empty() {
+            println!("    (the record has nothing, and says so)");
+        }
+    }
+    println!(
+        "\n  What to read here is the tags, not the ranking. `matches` means the record\n  \
+         covers the question; `weak_matches` means the best hit did not, and\n  \
+         `is_abstention()` reports it — the results come back labelled rather than\n  \
+         dressed as answers. `registered_gap` means the engine also raised an open\n  \
+         question whose territory the query meets: an honest \"nobody has decided\n  \
+         yet\", with a citation, standing beside whatever else was found.\n\n  \
+         Honest limitations, both registered rather than papered over. Ranking is\n  \
+         lexical only (U-23): it separates covered from uncovered reliably, but it\n  \
+         cannot tell that \"storage engine\" and \"Storage layer: build vs embed\" are\n  \
+         one question — that is what the fusion stage is for. And the corpus is\n  \
+         self-referential, so a register entry *about* retrieval ranks well on\n  \
+         queries about retrieval. Both are visible above if you look."
+    );
 
     rule("RECORD-TIME TRAVEL — bitemporality over the real corpus");
     println!(
@@ -335,6 +381,23 @@ fn label_of(ledger: &MemoryLedger, id: tacit_core::EntityId) -> String {
         .filter(|e| e.kind() == DECISION_KIND)
         .map(|e| e.label().to_string())
         .unwrap_or_else(|| id.to_string())
+}
+
+/// The label of whatever a record is about, for readable output.
+fn anchor_label(ledger: &MemoryLedger, record: &tacit_core::Record) -> String {
+    let entities = match record.content() {
+        Content::Claim(claim) => claim.entity_refs(),
+        Content::Gap(gap) => gap.territory.clone(),
+        _ => Vec::new(),
+    };
+    for entity in entities {
+        if let Some(e) = ledger.entity(entity)
+            && (e.kind() == DECISION_KIND || e.kind() == "unknown")
+        {
+            return e.label().to_string();
+        }
+    }
+    format!("{:?}", record.kind())
 }
 
 fn truncate(text: &str, width: usize) -> String {

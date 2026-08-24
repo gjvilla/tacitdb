@@ -1,0 +1,1144 @@
+//! Retrieval as one plan (design/001 §7): candidates, filter, expansion,
+//! fusion, and budget in a single call, with abstention as a first-class
+//! outcome.
+//!
+//! Three things here are deliberate.
+//!
+//! **The filter runs during scoring, not after** (R-1). Every posting is
+//! checked against the view before it contributes, so a scoped query never
+//! degrades to scanning an oversized candidate set and discarding most of it.
+//! Admission is [`GraphView::admits_record`] — the same predicate the
+//! projected graph uses, because retrieval and traversal disagreeing about
+//! what a view contains is a bug waiting to happen.
+//!
+//! **Fusion is a stage even with one ranker** (R-2). Lexical is the only
+//! candidate source today; the shape exists so vector candidates join the same
+//! plan rather than being blended by an application afterwards.
+//!
+//! **Abstention is an outcome, not an absence** (R-10). A query whose
+//! territory meets a registered gap returns that gap, so the honest answer
+//! "this is a known open question" is a retrieval result rather than an
+//! application heuristic.
+//!
+//! Like the projection, [`TextIndex`] is a derived artifact: a monotone fold
+//! over the log holding no view parameters, rebuildable at any time, never
+//! authoritative.
+
+use crate::content::{ClaimContent, Content};
+use crate::id::{EntityId, RecordId};
+use crate::ledger::MemoryLedger;
+use crate::projection::{GraphView, Projection, ViewSpec};
+use crate::record::Record;
+use std::collections::{BTreeMap, BTreeSet};
+
+// ── Tokenization ────────────────────────────────────────────────────────────
+
+/// Lowercase, split on anything that is not alphanumeric. No stemming: that is
+/// a language commitment this engine has not made.
+pub fn tokenize(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_lowercase())
+        .collect()
+}
+
+/// The text a record contributes to the index. Verdicts contribute nothing:
+/// they are the mechanism of state change, and their provenance is read
+/// through `history` rather than searched.
+pub fn indexable_text(record: &Record) -> Option<String> {
+    match record.content() {
+        Content::Claim(ClaimContent::Attribute { name, value, .. }) => {
+            Some(format!("{name} {}", value.as_search_text()))
+        }
+        Content::Claim(ClaimContent::Relation { predicate, .. }) => Some(predicate.clone()),
+        Content::Claim(ClaimContent::Pattern { context, forces, solution, .. }) => {
+            Some(format!("{context} {} {solution}", forces.join(" ")))
+        }
+        Content::Claim(ClaimContent::Text { body, .. }) => Some(body.clone()),
+        Content::Gap(gap) => Some(gap.question.clone()),
+        Content::Hypothesis(h) => {
+            Some(format!("{} {}", h.statement, h.falsifier.clone().unwrap_or_default()))
+        }
+        Content::Verdict(_) => None,
+    }
+}
+
+// ── The index ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Posting {
+    record: RecordId,
+    term_frequency: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DocStats {
+    length: u32,
+    entities: Vec<EntityId>,
+}
+
+/// An inverted index over record content. A fold over the log carrying no view
+/// parameters, exactly like [`Projection`] and for the same reason: nothing is
+/// removed, so incremental maintenance stays monotone and equivalence to
+/// rebuild is definitional.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextIndex {
+    applied: usize,
+    postings: BTreeMap<String, Vec<Posting>>,
+    docs: BTreeMap<RecordId, DocStats>,
+    total_length: u64,
+}
+
+impl Default for TextIndex {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl TextIndex {
+    pub fn empty() -> Self {
+        Self {
+            applied: 0,
+            postings: BTreeMap::new(),
+            docs: BTreeMap::new(),
+            total_length: 0,
+        }
+    }
+
+    pub fn rebuild(ledger: &MemoryLedger) -> Self {
+        let mut index = Self::empty();
+        index.advance(ledger);
+        index
+    }
+
+    /// Fold the log suffix this index has not seen. A no-op when nothing was
+    /// appended; returns the number of records consumed.
+    pub fn advance(&mut self, ledger: &MemoryLedger) -> usize {
+        let log = ledger.log();
+        debug_assert!(log.len() >= self.applied, "index advanced against a shorter log");
+        let start = self.applied;
+        for id in &log[start..] {
+            let record = ledger.record(*id).expect("log entries resolve");
+            self.step(record);
+        }
+        self.applied = log.len();
+        self.applied - start
+    }
+
+    fn step(&mut self, record: &Record) {
+        let Some(text) = indexable_text(record) else { return };
+        let tokens = tokenize(&text);
+        if tokens.is_empty() {
+            return;
+        }
+
+        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        for token in &tokens {
+            *counts.entry(token.clone()).or_default() += 1;
+        }
+        for (term, term_frequency) in counts {
+            self.postings
+                .entry(term)
+                .or_default()
+                .push(Posting { record: record.id(), term_frequency });
+        }
+
+        let entities = match record.content() {
+            Content::Claim(claim) => claim.entity_refs(),
+            Content::Gap(gap) => gap.territory.clone(),
+            _ => Vec::new(),
+        };
+        self.total_length += tokens.len() as u64;
+        self.docs.insert(record.id(), DocStats { length: tokens.len() as u32, entities });
+    }
+
+    #[doc(hidden)]
+    pub fn postings_len(&self, term: &str) -> Option<usize> {
+        self.postings.get(term).map(|p| p.len())
+    }
+
+    pub fn documents(&self) -> usize {
+        self.docs.len()
+    }
+
+    pub fn applied(&self) -> usize {
+        self.applied
+    }
+
+    fn average_length(&self) -> f64 {
+        if self.docs.is_empty() {
+            return 0.0;
+        }
+        self.total_length as f64 / self.docs.len() as f64
+    }
+
+    /// Pair the index with a ledger, a projection and a view.
+    pub fn retriever<'a>(
+        &'a self,
+        ledger: &'a MemoryLedger,
+        projection: &'a Projection,
+        spec: ViewSpec,
+    ) -> Retriever<'a> {
+        Retriever { index: self, ledger, projection, view: projection.view(ledger, spec) }
+    }
+}
+
+// ── Query ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Out,
+    In,
+    Both,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expansion {
+    pub hops: u8,
+    /// Empty means any predicate.
+    pub predicates: Vec<String>,
+    pub direction: Direction,
+}
+
+impl Expansion {
+    pub fn hops(hops: u8) -> Self {
+        Self { hops, predicates: Vec::new(), direction: Direction::Both }
+    }
+}
+
+/// How several candidate rankings combine. Reciprocal rank fusion is the
+/// default because it needs no score calibration between rankers — which
+/// matters the moment a vector ranker joins a lexical one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Fusion {
+    Rrf { k: f64 },
+    /// One weight per ranking, applied to normalized scores.
+    Weighted(Vec<f64>),
+}
+
+impl Default for Fusion {
+    fn default() -> Self {
+        Fusion::Rrf { k: 60.0 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Budget {
+    pub k: usize,
+    pub max_tokens: usize,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self { k: 10, max_tokens: 4_000 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Query {
+    pub text: String,
+    /// Restrict to records touching these entities. Empty means unscoped.
+    pub entity_scope: Vec<EntityId>,
+    pub expand: Option<Expansion>,
+    pub fusion: Fusion,
+    pub budget: Budget,
+    /// Below this fused score, results are reported as weak rather than
+    /// silently blended with confident ones. Corpus-relative by nature, which
+    /// is why `min_coverage` carries most of the relevance judgment.
+    pub min_score: f64,
+    /// The fraction of the query's *discriminating* terms the best result must
+    /// cover to count as a confident match. A score threshold alone cannot
+    /// tell "answers the question" from "shares a few words with it".
+    pub min_coverage: f64,
+    /// Query-side function words. Defaults to [`DEFAULT_STOPWORDS`].
+    pub stopwords: Vec<String>,
+    /// How many open questions to offer at most. An abstention that lists
+    /// every gap in the register has not helped anyone.
+    pub gap_budget: usize,
+}
+
+impl Query {
+    pub fn text(query: impl Into<String>) -> Self {
+        Self {
+            text: query.into(),
+            entity_scope: Vec::new(),
+            expand: None,
+            fusion: Fusion::default(),
+            budget: Budget::default(),
+            min_score: 0.0,
+            min_coverage: 0.5,
+            stopwords: DEFAULT_STOPWORDS.iter().map(|s| s.to_string()).collect(),
+            gap_budget: 3,
+        }
+    }
+
+    pub fn scoped_to(mut self, entities: Vec<EntityId>) -> Self {
+        self.entity_scope = entities;
+        self
+    }
+
+    pub fn expanding(mut self, expansion: Expansion) -> Self {
+        self.expand = Some(expansion);
+        self
+    }
+
+    pub fn with_budget(mut self, budget: Budget) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    pub fn with_min_score(mut self, min_score: f64) -> Self {
+        self.min_score = min_score;
+        self
+    }
+
+    pub fn with_min_coverage(mut self, min_coverage: f64) -> Self {
+        self.min_coverage = min_coverage;
+        self
+    }
+
+    /// Replace the query-side function-word list; pass an empty vector to
+    /// disable it entirely.
+    pub fn with_stopwords(mut self, stopwords: Vec<String>) -> Self {
+        self.stopwords = stopwords;
+        self
+    }
+}
+
+// ── Result ──────────────────────────────────────────────────────────────────
+
+/// Why a record is in the result.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Via {
+    /// Matched the query text directly.
+    Lexical,
+    /// Reached by graph expansion from a seed, with the edges traversed.
+    Expanded { from: RecordId, path: Vec<RecordId> },
+}
+
+#[derive(Debug, Clone)]
+pub struct Item<'a> {
+    pub record: &'a Record,
+    /// The fusion score that decided the ordering. Its *magnitude* is not a
+    /// relevance measure — reciprocal rank fusion returns roughly `1/k` for
+    /// everything by construction — so compare `relevance` instead.
+    pub score: f64,
+    /// The best underlying ranker score. This is what `min_score` judges.
+    pub relevance: f64,
+    pub via: Via,
+}
+
+/// The confidence half of the answer. `registered_gap` is deliberately *not*
+/// one of these: a gap can stand beside confident matches ("here is what is
+/// promoted, and here is the open question next to it"), so it lives in its
+/// own field rather than displacing the outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Results at or above `min_score`.
+    Matches,
+    /// Best results were below `min_score`, and are labelled as such.
+    WeakMatches,
+    /// The record has nothing for this query.
+    None,
+}
+
+#[derive(Debug)]
+pub struct Retrieved<'a> {
+    pub outcome: Outcome,
+    pub items: Vec<Item<'a>>,
+    /// Registered gaps whose territory the query meets. An honest "I don't
+    /// know, and here is the registered question".
+    pub gaps: Vec<&'a Record>,
+    /// Items dropped by the budget rather than by the filter, so a caller can
+    /// tell truncation from absence.
+    pub truncated: usize,
+}
+
+impl Retrieved<'_> {
+    pub fn has_registered_gap(&self) -> bool {
+        !self.gaps.is_empty()
+    }
+
+    /// Every tag that applies, in the vocabulary of design/001 §7.
+    pub fn tags(&self) -> Vec<&'static str> {
+        let mut tags = vec![match self.outcome {
+            Outcome::Matches => "matches",
+            Outcome::WeakMatches => "weak_matches",
+            Outcome::None => "none",
+        }];
+        if self.has_registered_gap() {
+            tags.push("registered_gap");
+        }
+        tags
+    }
+
+    /// True when the honest answer is "I don't know" — nothing confident, with
+    /// or without a registered question to point at.
+    pub fn is_abstention(&self) -> bool {
+        self.outcome != Outcome::Matches
+    }
+}
+
+// ── The retriever ───────────────────────────────────────────────────────────
+
+/// Function words carry no topic. They are dropped from *queries* only — the
+/// index keeps every token — because document frequency cannot identify them
+/// on a corpus like this one: in a small technical record "does" and "use" are
+/// rare, so IDF rewards them, and a question's grammar outranks its subject.
+///
+/// This is an English default and a deliberate crutch. Callers with another
+/// language, or with vector candidates carrying the semantic load, should
+/// replace it via [`Query::with_stopwords`].
+pub const DEFAULT_STOPWORDS: &[&str] = &[
+    "a", "about", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can", "did",
+    "do", "does", "for", "from", "get", "give", "had", "has", "have", "how", "i", "if", "in",
+    "into", "is", "it", "its", "make", "may", "me", "my", "no", "not", "of", "on", "or", "our",
+    "out", "over", "should", "so", "some", "than", "that", "the", "their", "them", "then",
+    "there", "these", "they", "this", "to", "up", "us", "use", "used", "was", "we", "were",
+    "what", "when", "where", "which", "who", "why", "will", "with", "would", "you", "your",
+];
+
+const BM25_K1: f64 = 1.2;
+const BM25_B: f64 = 0.75;
+/// A term appearing in more than this fraction of the corpus discriminates
+/// nothing and is dropped from scoring.
+const DF_PRUNE_FRACTION: f64 = 0.5;
+/// Below this many documents, document frequency is too noisy to prune on.
+const DF_PRUNE_MIN_DOCS: usize = 10;
+/// Gaps surface at this fraction of the match coverage bar.
+const GAP_COVERAGE_RATIO: f64 = 0.5;
+
+/// Ranked candidates plus the coverage statistics the outcome depends on.
+///
+/// Coverage is weighted by IDF rather than counting terms, because a result
+/// that matched only "rather" has not covered a question the way one that
+/// matched "storage" has. Query terms absent from the corpus entirely carry
+/// the weight of a `df = 0` term, so asking about something nobody has ever
+/// written about scores as the non-coverage it is.
+#[derive(Debug, Default)]
+struct Candidates {
+    ranked: Vec<(RecordId, f64)>,
+    matched_idf: BTreeMap<RecordId, f64>,
+    total_idf: f64,
+}
+
+impl Candidates {
+    fn coverage(&self, id: &RecordId) -> f64 {
+        if self.total_idf <= 0.0 {
+            return 0.0;
+        }
+        self.matched_idf.get(id).copied().unwrap_or(0.0) / self.total_idf
+    }
+}
+
+pub struct Retriever<'a> {
+    index: &'a TextIndex,
+    ledger: &'a MemoryLedger,
+    projection: &'a Projection,
+    view: GraphView<'a>,
+}
+
+impl<'a> Retriever<'a> {
+    pub fn view(&self) -> GraphView<'a> {
+        self.view
+    }
+
+    /// One plan: candidates, filter, expansion, fusion, budget.
+    pub fn retrieve(&self, query: &Query) -> Retrieved<'a> {
+        let candidates = self.lexical_candidates(query);
+        let lexical = candidates.ranked.clone();
+        // Fusion over one ranking today; the stage exists so a vector ranking
+        // joins here rather than in an application.
+        let fused = fuse(&[lexical], &query.fusion);
+
+        let raw: BTreeMap<RecordId, f64> = candidates.ranked.iter().copied().collect();
+        let mut items: Vec<Item<'a>> = fused
+            .iter()
+            .filter_map(|(id, score)| {
+                self.ledger.record(*id).map(|record| Item {
+                    record,
+                    score: *score,
+                    relevance: raw.get(id).copied().unwrap_or(0.0),
+                    via: Via::Lexical,
+                })
+            })
+            .collect();
+
+        if let Some(expansion) = &query.expand {
+            let seeds: Vec<RecordId> = items.iter().map(|i| i.record.id()).collect();
+            items.extend(self.expand(&seeds, expansion));
+        }
+
+        // Confidence is coverage first, score second: a result that shares two
+        // incidental words with a six-word question has not answered it.
+        let best = items.first().map(|i| i.relevance).unwrap_or(0.0);
+        let coverage =
+            items.first().map(|i| candidates.coverage(&i.record.id())).unwrap_or(0.0);
+        let outcome = if items.is_empty() {
+            Outcome::None
+        } else if coverage >= query.min_coverage && best >= query.min_score {
+            Outcome::Matches
+        } else {
+            Outcome::WeakMatches
+        };
+
+        let total = items.len();
+        let items = self.apply_budget(items, query.budget);
+        let truncated = total - items.len();
+
+        Retrieved { outcome, items, gaps: self.gaps_for(query), truncated }
+    }
+
+    /// BM25 over the inverted index, with the view's filter applied to each
+    /// posting *before* it contributes (R-1).
+    fn lexical_candidates(&self, query: &Query) -> Candidates {
+        let stopwords: BTreeSet<&str> = query.stopwords.iter().map(String::as_str).collect();
+        let terms: BTreeSet<String> = tokenize(&query.text)
+            .into_iter()
+            .filter(|t| !stopwords.contains(t.as_str()))
+            .collect();
+        let n = self.index.docs.len() as f64;
+        let avgdl = self.index.average_length();
+        if terms.is_empty() || n == 0.0 || avgdl == 0.0 {
+            return Candidates::default();
+        }
+        let scope: BTreeSet<EntityId> = query.entity_scope.iter().copied().collect();
+
+        // A term in most of the corpus discriminates nothing — this is the
+        // standard BM25 negative-IDF cutoff, and without it "the" and "does"
+        // decide the ranking. Skipped on a corpus too small for the statistic
+        // to mean anything.
+        let prunable = self.index.docs.len() >= DF_PRUNE_MIN_DOCS;
+        let discriminating: Vec<&String> = terms
+            .iter()
+            .filter(|term| {
+                !prunable
+                    || self
+                        .index
+                        .postings
+                        .get(*term)
+                        .is_none_or(|p| (p.len() as f64) <= n * DF_PRUNE_FRACTION)
+            })
+            .collect();
+        if discriminating.is_empty() {
+            return Candidates::default();
+        }
+
+
+        let mut scores: BTreeMap<RecordId, f64> = BTreeMap::new();
+        let mut matched_idf: BTreeMap<RecordId, f64> = BTreeMap::new();
+        let mut total_idf = 0.0;
+        for term in &discriminating {
+            let Some(postings) = self.index.postings.get(*term) else {
+                // Never written about: weigh it as a `df = 0` term would be.
+                total_idf += ((n + 0.5) / 0.5 + 1.0).ln();
+                continue;
+            };
+            // Document frequency is a collection statistic, computed over the
+            // whole index rather than the filtered subset, so that a scoped
+            // query does not silently re-weight the corpus.
+            let df = postings.len() as f64;
+            let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+            total_idf += idf;
+
+            for posting in postings {
+                let Some(stats) = self.index.docs.get(&posting.record) else { continue };
+                if !scope.is_empty() && !stats.entities.iter().any(|e| scope.contains(e)) {
+                    continue;
+                }
+                if !self.view.admits_record(posting.record) {
+                    continue;
+                }
+                let tf = f64::from(posting.term_frequency);
+                let norm = 1.0 - BM25_B + BM25_B * f64::from(stats.length) / avgdl;
+                let contribution = idf * (tf * (BM25_K1 + 1.0)) / (tf + BM25_K1 * norm);
+                *scores.entry(posting.record).or_default() += contribution;
+                *matched_idf.entry(posting.record).or_default() += idf;
+            }
+        }
+
+        let mut ranked: Vec<(RecordId, f64)> = scores.into_iter().collect();
+        // Ties break on log order, so results are stable across runs.
+        ranked.sort_by(|a, b| {
+            b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
+        });
+        Candidates { ranked, matched_idf, total_idf }
+    }
+
+    fn log_order(&self, id: RecordId) -> usize {
+        self.ledger.log().iter().position(|r| *r == id).unwrap_or(usize::MAX)
+    }
+
+    /// Walk out from the entities the seeds are about, collecting records the
+    /// view admits, and remembering the edges that justified each one.
+    fn expand(&self, seeds: &[RecordId], expansion: &Expansion) -> Vec<Item<'a>> {
+        let seen: BTreeSet<RecordId> = seeds.iter().copied().collect();
+        let mut found: Vec<Item<'a>> = Vec::new();
+        let mut emitted: BTreeSet<RecordId> = seen.clone();
+
+        for seed in seeds {
+            let Some(record) = self.ledger.record(*seed) else { continue };
+            let start: Vec<EntityId> = match record.content() {
+                Content::Claim(claim) => claim.entity_refs(),
+                Content::Gap(gap) => gap.territory.clone(),
+                _ => Vec::new(),
+            };
+
+            let mut frontier: Vec<(EntityId, Vec<RecordId>)> =
+                start.into_iter().map(|e| (e, Vec::new())).collect();
+            let mut visited: BTreeSet<EntityId> = frontier.iter().map(|(e, _)| *e).collect();
+
+            for _ in 0..expansion.hops {
+                let mut next = Vec::new();
+                for (entity, path) in &frontier {
+                    let Some(node) = self.view.node(*entity) else { continue };
+                    let edges = match expansion.direction {
+                        Direction::Out => node.out_edges(),
+                        Direction::In => node.in_edges(),
+                        Direction::Both => {
+                            let mut both = node.out_edges();
+                            both.extend(node.in_edges());
+                            both
+                        }
+                    };
+                    for edge in edges {
+                        if !expansion.predicates.is_empty()
+                            && !expansion.predicates.iter().any(|p| p == edge.predicate())
+                        {
+                            continue;
+                        }
+                        let other =
+                            if edge.subject() == *entity { edge.object() } else { edge.subject() };
+                        if !visited.insert(other) {
+                            continue;
+                        }
+                        let mut hop = path.clone();
+                        hop.push(edge.record());
+                        next.push((other, hop));
+                    }
+                }
+                for (entity, path) in &next {
+                    for record in self.view.about(*entity) {
+                        if emitted.insert(record.id()) {
+                            found.push(Item {
+                                record,
+                                // Expanded context is supporting material, not
+                                // a match: it never outranks a direct hit.
+                                score: 0.0,
+                                relevance: 0.0,
+                                via: Via::Expanded { from: *seed, path: path.clone() },
+                            });
+                        }
+                    }
+                }
+                frontier = next;
+                if frontier.is_empty() {
+                    break;
+                }
+            }
+        }
+        found
+    }
+
+    /// Registered gaps the query meets — by scope if one was given, otherwise
+    /// by matching the gap's own text. Gaps are indexed like every other
+    /// record, which is what makes this a retrieval outcome rather than an
+    /// application heuristic.
+    fn gaps_for(&self, query: &Query) -> Vec<&'a Record> {
+        let scope: BTreeSet<EntityId> = query.entity_scope.iter().copied().collect();
+        let mut gaps: Vec<&'a Record> = Vec::new();
+
+        if !scope.is_empty() {
+            for entity in &scope {
+                for record in self.view.about(*entity) {
+                    if matches!(record.content(), Content::Gap(_))
+                        && !gaps.iter().any(|g| g.id() == record.id())
+                    {
+                        gaps.push(record);
+                    }
+                }
+            }
+            gaps.truncate(query.gap_budget);
+            return gaps;
+        }
+
+        // Unscoped: a gap is offered when the question genuinely overlaps it,
+        // judged by the same coverage rule that decides a confident match.
+        let mut scoped = query.clone();
+        scoped.entity_scope.clear();
+        let candidates = self.lexical_candidates(&scoped);
+        if candidates.total_idf <= 0.0 {
+            return gaps;
+        }
+        // A gap is an *offer* ("this may be your question"), not an assertion,
+        // so it surfaces on weaker overlap than a confident match demands.
+        // Requiring full match coverage would hide the registered unknown that
+        // asks precisely what the questioner just asked.
+        //
+        // Offers are ranked by how much of the *question* they cover, not by
+        // BM25: term frequency rewards a long record that repeats a common
+        // word, which is the wrong instinct when choosing which open question
+        // to raise.
+        let gap_coverage = query.min_coverage * GAP_COVERAGE_RATIO;
+        let mut scored: Vec<(f64, &'a Record)> = Vec::new();
+        for (id, _) in &candidates.ranked {
+            let coverage = candidates.coverage(id);
+            if coverage < gap_coverage {
+                continue;
+            }
+            let Some(record) = self.ledger.record(*id) else { continue };
+            if matches!(record.content(), Content::Gap(_)) {
+                scored.push((coverage, record));
+            }
+        }
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+        gaps.extend(scored.into_iter().take(query.gap_budget).map(|(_, r)| r));
+        gaps
+    }
+
+    fn apply_budget(&self, items: Vec<Item<'a>>, budget: Budget) -> Vec<Item<'a>> {
+        let mut kept = Vec::new();
+        let mut tokens = 0usize;
+        for item in items {
+            if kept.len() >= budget.k {
+                break;
+            }
+            let cost = indexable_text(item.record).map(|t| tokenize(&t).len()).unwrap_or(0);
+            if !kept.is_empty() && tokens + cost > budget.max_tokens {
+                break;
+            }
+            tokens += cost;
+            kept.push(item);
+        }
+        kept
+    }
+
+    pub fn projection(&self) -> &'a Projection {
+        self.projection
+    }
+}
+
+/// Combine rankings. With one input this is order-preserving, which is the
+/// point: the stage is where a second ranker will land.
+pub fn fuse(rankings: &[Vec<(RecordId, f64)>], fusion: &Fusion) -> Vec<(RecordId, f64)> {
+    let mut totals: BTreeMap<RecordId, f64> = BTreeMap::new();
+    let mut first_rank: BTreeMap<RecordId, usize> = BTreeMap::new();
+
+    match fusion {
+        Fusion::Rrf { k } => {
+            for ranking in rankings {
+                for (rank, (id, _)) in ranking.iter().enumerate() {
+                    *totals.entry(*id).or_default() += 1.0 / (k + (rank + 1) as f64);
+                    first_rank.entry(*id).or_insert(rank);
+                }
+            }
+        }
+        Fusion::Weighted(weights) => {
+            for (i, ranking) in rankings.iter().enumerate() {
+                let weight = weights.get(i).copied().unwrap_or(1.0);
+                let top = ranking.first().map(|(_, s)| *s).unwrap_or(0.0);
+                for (rank, (id, score)) in ranking.iter().enumerate() {
+                    let normalized = if top > 0.0 { score / top } else { 0.0 };
+                    *totals.entry(*id).or_default() += weight * normalized;
+                    first_rank.entry(*id).or_insert(rank);
+                }
+            }
+        }
+    }
+
+    let mut fused: Vec<(RecordId, f64)> = totals.into_iter().collect();
+    fused.sort_by(|a, b| {
+        b.1.total_cmp(&a.1).then_with(|| first_rank[&a.0].cmp(&first_rank[&b.0]))
+    });
+    fused
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content::{GapContent, VerdictAction, VerdictContent};
+    use crate::envelope::{Author, SourceRef};
+    use crate::record::Draft;
+    use crate::state::ClaimState;
+    use crate::projection::StateFilter;
+
+    struct Fixture {
+        ledger: MemoryLedger,
+        torque: EntityId,
+        rail: EntityId,
+    }
+
+    fn fixture() -> Fixture {
+        let mut ledger = MemoryLedger::new();
+        let torque = ledger.add_entity("process", "torque check");
+        let rail = ledger.add_entity("component", "seat rail");
+        Fixture { ledger, torque, rail }
+    }
+
+    fn prose(subject: EntityId, body: &str, author: Author) -> Draft {
+        Draft::new(
+            author,
+            SourceRef::channel("interview"),
+            Content::Claim(ClaimContent::Text { body: body.into(), about: vec![subject] }),
+        )
+    }
+
+    fn promote(target: RecordId) -> Draft {
+        Draft::new(
+            Author::human("Greg"),
+            SourceRef::channel("huddle"),
+            Content::Verdict(VerdictContent {
+                action: VerdictAction::Promote { target, retiring: None },
+                rationale: None,
+            }),
+        )
+    }
+
+    fn gap(question: &str, territory: Vec<EntityId>) -> Draft {
+        Draft::new(
+            Author::agent("assistant"),
+            SourceRef::channel("chat"),
+            Content::Gap(GapContent { question: question.into(), territory }),
+        )
+    }
+
+    fn setup() -> (MemoryLedger, EntityId, EntityId) {
+        let mut f = fixture();
+        let promoted = f
+            .ledger
+            .append(prose(f.torque, "the fastener seats at twenty four newton metres", Author::human("Maria")))
+            .unwrap();
+        f.ledger.append(promote(promoted)).unwrap();
+        f.ledger
+            .append(prose(f.rail, "the seat rail binds when the fixture is cold", Author::agent("miner")))
+            .unwrap();
+        (f.ledger, f.torque, f.rail)
+    }
+
+    fn retrieve<'a>(
+        index: &'a TextIndex,
+        ledger: &'a MemoryLedger,
+        projection: &'a Projection,
+        spec: ViewSpec,
+        query: &Query,
+    ) -> Retrieved<'a> {
+        index.retriever(ledger, projection, spec).retrieve(query)
+    }
+
+    #[test]
+    fn lexical_search_finds_promoted_claims() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener newton metres"),
+        );
+        assert_eq!(found.outcome, Outcome::Matches);
+        assert_eq!(found.items.len(), 1);
+        assert!(matches!(found.items[0].via, Via::Lexical));
+    }
+
+    /// R-1: the filter runs while scoring, so an unpromoted claim never
+    /// contributes — not even to be discarded afterwards.
+    #[test]
+    fn the_view_filter_is_applied_during_scoring() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let query = Query::text("seat rail binds cold fixture");
+
+        let default = retrieve(&index, &ledger, &projection, ViewSpec::now(), &query);
+        assert_eq!(default.outcome, Outcome::None, "the rail claim is only proposed");
+
+        let with_proposed = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now().with_states(StateFilter::PromotedAndProposed),
+            &query,
+        );
+        assert_eq!(with_proposed.outcome, Outcome::Matches);
+        assert_eq!(with_proposed.items.len(), 1);
+    }
+
+    #[test]
+    fn author_and_time_filters_reach_retrieval() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let query = Query::text("fastener");
+
+        let humans = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now().by_author_kind(crate::envelope::AuthorKind::Human),
+            &query,
+        );
+        assert_eq!(humans.items.len(), 1);
+
+        let agents = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now().by_author_kind(crate::envelope::AuthorKind::Agent),
+            &query,
+        );
+        assert_eq!(agents.outcome, Outcome::None);
+    }
+
+    #[test]
+    fn entity_scope_restricts_candidates() {
+        let (ledger, torque, rail) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let spec = ViewSpec::now().with_states(StateFilter::PromotedAndProposed);
+
+        let scoped = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            spec,
+            &Query::text("rail binds fixture").scoped_to(vec![rail]),
+        );
+        assert!(!scoped.items.is_empty());
+        for item in &scoped.items {
+            let Content::Claim(claim) = item.record.content() else { continue };
+            assert!(claim.entity_refs().contains(&rail));
+        }
+
+        let other = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            spec,
+            &Query::text("fastener").scoped_to(vec![rail]),
+        );
+        assert_eq!(other.outcome, Outcome::None, "the fastener claim is about torque, not rail");
+
+        // The same query unscoped does find it.
+        let unscoped = retrieve(&index, &ledger, &projection, spec, &Query::text("fastener"));
+        assert_eq!(unscoped.outcome, Outcome::Matches);
+        let _ = torque;
+    }
+
+    /// R-10: a query whose territory meets an open question returns it, and it
+    /// can stand beside confident matches rather than displacing them.
+    #[test]
+    fn registered_gaps_are_a_retrieval_outcome() {
+        let (mut ledger, torque, _) = setup();
+        ledger.append(gap("what torque for the rail fastener in cold weather?", vec![torque])).unwrap();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("cold weather torque"),
+        );
+        assert!(found.has_registered_gap());
+        assert!(found.tags().contains(&"registered_gap"));
+
+        // Beside a confident match, both are reported.
+        let both = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener torque").scoped_to(vec![torque]),
+        );
+        assert_eq!(both.outcome, Outcome::Matches);
+        assert!(both.has_registered_gap());
+        assert_eq!(both.tags(), vec!["matches", "registered_gap"]);
+    }
+
+    /// An answered gap stops being an open question, so it stops being an
+    /// abstention the engine offers.
+    #[test]
+    fn answered_gaps_no_longer_abstain() {
+        let (mut ledger, torque, _) = setup();
+        let g = ledger.append(gap("what torque in cold weather?", vec![torque])).unwrap();
+        let answer = ledger
+            .append(prose(torque, "in cold weather the value is unchanged", Author::human("Maria")))
+            .unwrap();
+        ledger.append(promote(answer)).unwrap();
+
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let query = Query::text("cold weather").scoped_to(vec![torque]);
+        assert!(retrieve(&index, &ledger, &projection, ViewSpec::now(), &query).has_registered_gap());
+
+        ledger
+            .append(Draft::new(
+                Author::human("Greg"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Answer { gap: g, with_claim: answer },
+                    rationale: None,
+                }),
+            ))
+            .unwrap();
+        let projection = Projection::rebuild(&ledger);
+        let after = retrieve(&index, &ledger, &projection, ViewSpec::now(), &query);
+        assert!(!after.has_registered_gap(), "an answered question is no longer open");
+    }
+
+    #[test]
+    fn weak_matches_are_labelled_not_blended() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener").with_min_score(1_000.0),
+        );
+        assert_eq!(found.outcome, Outcome::WeakMatches);
+        assert!(found.is_abstention());
+        assert!(!found.items.is_empty(), "the results are returned, but labelled");
+    }
+
+    #[test]
+    fn an_empty_record_abstains() {
+        let ledger = MemoryLedger::new();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found =
+            retrieve(&index, &ledger, &projection, ViewSpec::now(), &Query::text("anything"));
+        assert_eq!(found.outcome, Outcome::None);
+        assert_eq!(found.tags(), vec!["none"]);
+        assert!(found.is_abstention());
+    }
+
+    #[test]
+    fn expansion_carries_the_path_that_justified_it() {
+        let (mut ledger, torque, rail) = setup();
+        let edge = ledger
+            .append(Draft::new(
+                Author::human("Greg"),
+                SourceRef::channel("interview"),
+                Content::Claim(ClaimContent::Relation {
+                    subject: torque,
+                    predicate: "applies_to".into(),
+                    object: rail,
+                    properties: Default::default(),
+                }),
+            ))
+            .unwrap();
+        ledger.append(promote(edge)).unwrap();
+        let neighbour = ledger
+            .append(prose(rail, "the rail ships pre-drilled", Author::human("Maria")))
+            .unwrap();
+        ledger.append(promote(neighbour)).unwrap();
+
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener").expanding(Expansion::hops(1)),
+        );
+        let expanded: Vec<_> =
+            found.items.iter().filter(|i| matches!(i.via, Via::Expanded { .. })).collect();
+        assert!(!expanded.is_empty(), "the neighbour is reachable in one hop");
+        let Via::Expanded { path, .. } = &expanded[0].via else { panic!() };
+        assert_eq!(path, &vec![edge], "the traversed edge is reported");
+    }
+
+    #[test]
+    fn the_budget_truncates_and_says_so() {
+        let mut f = fixture();
+        for i in 0..8 {
+            let id = f
+                .ledger
+                .append(prose(f.torque, &format!("fastener note number {i}"), Author::human("M")))
+                .unwrap();
+            f.ledger.append(promote(id)).unwrap();
+        }
+        let index = TextIndex::rebuild(&f.ledger);
+        let projection = Projection::rebuild(&f.ledger);
+        let found = retrieve(
+            &index,
+            &f.ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener").with_budget(Budget { k: 3, max_tokens: 10_000 }),
+        );
+        assert_eq!(found.items.len(), 3);
+        assert_eq!(found.truncated, 5);
+    }
+
+    #[test]
+    fn verdicts_are_not_retrievable() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        for record in ledger.records() {
+            if matches!(record.content(), Content::Verdict(_)) {
+                assert!(indexable_text(record).is_none());
+                assert!(!index.docs.contains_key(&record.id()));
+            }
+        }
+    }
+
+    /// The index is a derived artifact under the same discipline as the
+    /// projection: incremental maintenance equals rebuild.
+    #[test]
+    fn incremental_advance_equals_rebuild() {
+        let mut f = fixture();
+        let mut incremental = TextIndex::empty();
+        let a = f.ledger.append(prose(f.torque, "first note", Author::human("M"))).unwrap();
+        incremental.advance(&f.ledger);
+        f.ledger.append(promote(a)).unwrap();
+        incremental.advance(&f.ledger);
+        f.ledger.append(prose(f.rail, "second note", Author::agent("x"))).unwrap();
+        incremental.advance(&f.ledger);
+        assert_eq!(incremental, TextIndex::rebuild(&f.ledger));
+        assert_eq!(incremental.advance(&f.ledger), 0);
+    }
+
+    #[test]
+    fn rrf_fusion_is_order_preserving_for_one_ranking() {
+        let mut ledger = MemoryLedger::new();
+        let e = ledger.add_entity("x", "x");
+        let a = ledger.append(prose(e, "alpha", Author::human("M"))).unwrap();
+        let b = ledger.append(prose(e, "beta", Author::human("M"))).unwrap();
+        let ranking = vec![(a, 9.0), (b, 1.0)];
+        let fused = fuse(&[ranking], &Fusion::default());
+        assert_eq!(fused.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![a, b]);
+    }
+
+    #[test]
+    fn state_changes_show_up_without_reindexing() {
+        let (mut ledger, torque, _) = setup();
+        let claim = ledger
+            .append(prose(torque, "a distinctive phrase about brackets", Author::human("M")))
+            .unwrap();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let query = Query::text("distinctive brackets");
+        assert_eq!(
+            retrieve(&index, &ledger, &projection, ViewSpec::now(), &query).outcome,
+            Outcome::None
+        );
+
+        ledger.append(promote(claim)).unwrap();
+        // The index is untouched; only the projection advanced.
+        let projection = Projection::rebuild(&ledger);
+        assert_eq!(
+            retrieve(&index, &ledger, &projection, ViewSpec::now(), &query).outcome,
+            Outcome::Matches,
+            "promotion changes retrievability with no reindex"
+        );
+        let _ = ClaimState::Promoted;
+    }
+}

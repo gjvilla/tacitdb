@@ -11,3 +11,17 @@ pub enum Value {
     Boolean(bool),
     Timestamp(Timestamp),
 }
+
+impl Value {
+    /// The searchable rendering of a value. Numbers and timestamps are indexed
+    /// as their text form so a query can name them.
+    pub fn as_search_text(&self) -> String {
+        match self {
+            Value::Text(t) => t.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Integer(i) => i.to_string(),
+            Value::Boolean(b) => b.to_string(),
+            Value::Timestamp(t) => t.to_string(),
+        }
+    }
+}
