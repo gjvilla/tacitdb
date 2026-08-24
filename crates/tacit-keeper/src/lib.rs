@@ -6,6 +6,11 @@
 
 pub mod corpus;
 pub mod parse;
+pub mod register;
 
-pub use corpus::{DECISION_KIND, IngestError, IngestReport, MENTIONS, ingest_decisions, ingest_text};
+pub use corpus::{
+    DECISION_KIND, IngestError, IngestReport, MENTIONS, UNKNOWN_KIND, ingest_corpus,
+    ingest_decisions, ingest_text,
+};
 pub use parse::{ParseError, ParsedRecord, parse_corpus};
+pub use register::{ParsedUnknown, Resolution, parse_register};

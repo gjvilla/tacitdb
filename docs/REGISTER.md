@@ -28,10 +28,18 @@ What the project has decided and recorded, with owners and review triggers:
   the `docs/DECISIONS.md` ingest, plus the `dogfood` example),
   `tacit-mcp` (host stub), `tacit-python` (binding shell, no PyO3 yet).
 - **The corpus ingests itself.** `cargo run -p tacit-keeper --example dogfood`
-  loads this project's own decision records into the engine and interrogates
-  them: provenance with evidence chains, record-time travel, the projected
-  graph, and weighted paths over the instrument panel. It prints its own
-  honest position against H-0001(a).
+  loads this project's own decision records *and this register* into the engine
+  and interrogates them: provenance with evidence chains, record-time travel,
+  the projected graph, and weighted paths over the instrument panel. It prints
+  its own honest position against H-0001(a).
+- **Room 2 is in the ledger, not only in this file** (2026-08-23). Every row
+  below is ingested as a gap record carrying its trigger, so the engine can
+  answer "that is a registered open question" instead of "nothing found" —
+  the raw material for honest abstention. Resolved rows are transcribed as
+  `Answer` verdicts naming the promoted claim that settled them, which the
+  engine refuses unless that claim really is promoted. Consequence worth
+  knowing: this document is now load-bearing for the test suite. A malformed
+  row is a hard error, by design.
 
 A known known is only as good as its review trigger — see Room 4 for the backward
 door.

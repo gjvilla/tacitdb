@@ -12,17 +12,20 @@
 //! is backdated and invariant 3 is untouched.
 
 use crate::parse::{ParseError, ParsedRecord, mentioned_ids, parse_corpus, split_evidence};
+use crate::register::{ParsedUnknown, parse_register, register_owner};
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tacit_core::{
-    Author, ClaimContent, Content, Draft, EntityId, Evidence, HypothesisContent, MemoryLedger,
-    RecordId, ReviewTrigger, SourceRef, VerdictAction, VerdictContent,
+    Author, ClaimContent, Content, Draft, EntityId, Evidence, GapContent, HypothesisContent,
+    MemoryLedger, RecordId, ReviewTrigger, SourceRef, VerdictAction, VerdictContent,
 };
 
 /// Entity kind for a corpus record's identity anchor.
 pub const DECISION_KIND: &str = "decision";
+/// Entity kind for a register unknown's identity anchor.
+pub const UNKNOWN_KIND: &str = "unknown";
 /// Predicate for "this record's text names that record". A bare textual
 /// mention is all that was observed, so the predicate claims nothing more.
 pub const MENTIONS: &str = "mentions";
@@ -59,6 +62,9 @@ pub enum IngestError {
 
     #[error("record {record}: score_by is only meaningful on a hypothesis")]
     StrayScoreBy { record: String },
+
+    #[error("the register does not state an owner, so its gaps have no author")]
+    MissingRegisterOwner,
 }
 
 /// What one ingest run put into the ledger.
@@ -66,6 +72,10 @@ pub enum IngestError {
 pub struct IngestReport {
     pub sources: Vec<(String, EntityId)>,
     pub decisions: Vec<(String, EntityId)>,
+    pub unknowns: Vec<(String, EntityId)>,
+    pub gaps: Vec<(String, RecordId)>,
+    /// Resolved unknowns, as (unknown id, the decision that settled it).
+    pub answered: Vec<(String, String)>,
     pub content_claims: Vec<(String, RecordId)>,
     pub title_claims: Vec<(String, RecordId)>,
     pub mention_claims: Vec<(String, String, RecordId)>,
@@ -80,11 +90,25 @@ impl IngestReport {
         self.content_claims.len()
             + self.title_claims.len()
             + self.mention_claims.len()
+            + self.gaps.len()
             + self.verdicts.len()
     }
 
     pub fn decision(&self, id: &str) -> Option<EntityId> {
         self.decisions.iter().find(|(k, _)| k == id).map(|(_, e)| *e)
+    }
+
+    pub fn unknown(&self, id: &str) -> Option<EntityId> {
+        self.unknowns.iter().find(|(k, _)| k == id).map(|(_, e)| *e)
+    }
+
+    /// An anchor of either kind — what a cross-reference resolves against.
+    pub fn anchor(&self, id: &str) -> Option<EntityId> {
+        self.decision(id).or_else(|| self.unknown(id))
+    }
+
+    pub fn gap(&self, id: &str) -> Option<RecordId> {
+        self.gaps.iter().find(|(k, _)| k == id).map(|(_, r)| *r)
     }
 
     pub fn content_claim(&self, id: &str) -> Option<RecordId> {
@@ -97,33 +121,72 @@ pub fn ingest_decisions(
     ledger: &mut MemoryLedger,
     repo_root: &Path,
 ) -> Result<IngestReport, IngestError> {
-    let path = repo_root.join("docs/DECISIONS.md");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|source| IngestError::Io { path: path.clone(), source })?;
-    ingest_text(ledger, &text, repo_root)
+    let decisions = read_doc(repo_root, "docs/DECISIONS.md")?;
+    ingest_text(ledger, &decisions, None, repo_root)
+}
+
+/// Ingest both founding documents: the decision records and the register's
+/// known unknowns. The register's open questions become gap records, which is
+/// what lets the engine answer "that is a registered open question" rather
+/// than "nothing found".
+pub fn ingest_corpus(
+    ledger: &mut MemoryLedger,
+    repo_root: &Path,
+) -> Result<IngestReport, IngestError> {
+    let decisions = read_doc(repo_root, "docs/DECISIONS.md")?;
+    let register = read_doc(repo_root, "docs/REGISTER.md")?;
+    ingest_text(ledger, &decisions, Some(&register), repo_root)
+}
+
+fn read_doc(repo_root: &Path, relative: &str) -> Result<String, IngestError> {
+    let path = repo_root.join(relative);
+    std::fs::read_to_string(&path).map_err(|source| IngestError::Io { path, source })
 }
 
 pub fn ingest_text(
     ledger: &mut MemoryLedger,
     text: &str,
+    register_text: Option<&str>,
     repo_root: &Path,
 ) -> Result<IngestReport, IngestError> {
     let parsed = parse_corpus(text)?;
+    let unknowns = match register_text {
+        Some(register) => parse_register(register)?,
+        None => Vec::new(),
+    };
+    let register_author = match register_text {
+        Some(register) => Some(Author::human(
+            register_owner(register).ok_or(IngestError::MissingRegisterOwner)?,
+        )),
+        None => None,
+    };
     let mut report = IngestReport::default();
 
-    // Identity first: every record gets an anchor, so prose claims have
-    // something to be `about` and cross-references have somewhere to point.
+    // Identity first, for both corpora, so a cross-reference resolves in
+    // either direction: a decision naming U-1 and an unknown naming D-0012
+    // both find an anchor.
     for record in &parsed {
         let entity = ledger.upsert_entity(DECISION_KIND, &record.id);
         report.decisions.push((record.id.clone(), entity));
     }
+    for unknown in &unknowns {
+        let entity = ledger.upsert_entity(UNKNOWN_KIND, &unknown.id);
+        report.unknowns.push((unknown.id.clone(), entity));
+    }
 
-    // Phase 1 — every record lands proposed.
+    // Phase 1 — every decision record lands proposed.
     for record in &parsed {
         ingest_one(ledger, record, repo_root, &mut report)?;
     }
 
-    // Phase 2 — transcribe the verdicts the document records.
+    // Phase 2 — every register row lands as a registered gap.
+    if let Some(author) = &register_author {
+        for unknown in &unknowns {
+            ingest_gap(ledger, unknown, author, &mut report)?;
+        }
+    }
+
+    // Phase 3 — transcribe the verdicts the decision document records.
     for record in &parsed {
         let state = record.require("state")?;
         let author = Author::human(record.require("author")?);
@@ -167,7 +230,91 @@ pub fn ingest_text(
         }
     }
 
+    // Phase 4 — transcribe the register's resolutions. Last, because the
+    // engine refuses to answer a gap with a claim that is not yet promoted:
+    // the ordering is forced by the grammar, not chosen for convenience.
+    if let Some(author) = &register_author {
+        for unknown in &unknowns {
+            let Some(resolution) = &unknown.resolved else { continue };
+            let gap = report.gap(&unknown.id).expect("gap appended in phase 2");
+            let settled_by = resolution.by.as_ref().and_then(|d| report.content_claim(d));
+            let (action, rationale) = match (settled_by, &resolution.by) {
+                (Some(with_claim), Some(decision)) => (
+                    VerdictAction::Answer { gap, with_claim },
+                    format!(
+                        "transcribed from docs/REGISTER.md: {} resolved {} by {decision}",
+                        unknown.id, resolution.date
+                    ),
+                ),
+                _ => (
+                    VerdictAction::Withdraw { gap },
+                    format!(
+                        "transcribed from docs/REGISTER.md: {} resolved {} with no \
+                         settling record named",
+                        unknown.id, resolution.date
+                    ),
+                ),
+            };
+            let verdict = ledger.append(Draft::new(
+                author.clone(),
+                SourceRef {
+                    channel: "corpus-ingest".into(),
+                    reference: Some(format!("docs/REGISTER.md {}", unknown.id)),
+                },
+                Content::Verdict(VerdictContent { action, rationale: Some(rationale) }),
+            ))?;
+            report.verdicts.push(verdict);
+            if let Some(decision) = &resolution.by {
+                report.answered.push((unknown.id.clone(), decision.clone()));
+            }
+        }
+    }
+
     Ok(report)
+}
+
+/// One register row becomes one gap: the question, the territory it covers,
+/// and its trigger as the review trigger. The Notes column is carried into the
+/// question rather than dropped — a register that loses its own commentary on
+/// ingest would be a poor advertisement for a corpus about honesty.
+fn ingest_gap(
+    ledger: &mut MemoryLedger,
+    unknown: &ParsedUnknown,
+    author: &Author,
+    report: &mut IngestReport,
+) -> Result<(), IngestError> {
+    let anchor = report.unknown(&unknown.id).expect("anchor minted above");
+    let mut territory = vec![anchor];
+    for mention in unknown.mentions() {
+        if let Some(entity) = report.anchor(&mention) {
+            territory.push(entity);
+        }
+    }
+
+    let question = if unknown.notes.is_empty() {
+        unknown.question.clone()
+    } else {
+        format!("{}\n\nNotes. {}", unknown.question, unknown.notes)
+    };
+
+    let trigger = unknown.trigger.trim();
+    let review_trigger = (!trigger.is_empty() && trigger != "—").then(|| ReviewTrigger {
+        due_at: None,
+        on_event: Some(trigger.to_string()),
+    });
+
+    let mut draft = Draft::new(
+        author.clone(),
+        SourceRef {
+            channel: "register".into(),
+            reference: Some(format!("docs/REGISTER.md {}", unknown.id)),
+        },
+        Content::Gap(GapContent { question, territory }),
+    );
+    draft.review_trigger = review_trigger;
+    let id = ledger.append(draft)?;
+    report.gaps.push((unknown.id.clone(), id));
+    Ok(())
 }
 
 fn ingest_one(
@@ -227,7 +374,7 @@ fn ingest_one(
     // These stay *proposed* — no human has ratified the machine's reading, so
     // the default graph shows no edges until someone does.
     for other in mentioned_ids(&record.raw, &record.id) {
-        let Some(object) = report.decision(&other) else { continue };
+        let Some(object) = report.anchor(&other) else { continue };
         let mut edge = Draft::new(
             Author::agent("corpus-ingest"),
             source.clone(),
@@ -626,6 +773,118 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn ingested_corpus() -> (MemoryLedger, IngestReport) {
+        let mut ledger = MemoryLedger::new();
+        let report = ingest_corpus(&mut ledger, &repo_root()).expect("both documents ingest");
+        (ledger, report)
+    }
+
+    fn register_rows() -> Vec<crate::register::ParsedUnknown> {
+        let text = std::fs::read_to_string(repo_root().join("docs/REGISTER.md")).unwrap();
+        crate::register::parse_register(&text).unwrap()
+    }
+
+    /// The whole point: the register's open questions become retrievable gaps,
+    /// so the engine can say "that is a registered open question" instead of
+    /// "nothing found".
+    #[test]
+    fn open_unknowns_become_registered_gaps() {
+        let (ledger, report) = ingested_corpus();
+        let rows = register_rows();
+        assert!(rows.len() >= 20, "the register was found, not a fragment");
+        assert_eq!(report.gaps.len(), rows.len());
+
+        let open = rows.iter().filter(|u| u.resolved.is_none()).count();
+        assert!(open > 0);
+        assert_eq!(ledger.registered_gaps().len(), open);
+
+        // A decisions-only ingest has none of this — the contrast is the point.
+        let mut bare = MemoryLedger::new();
+        ingest_decisions(&mut bare, &repo_root()).unwrap();
+        assert!(bare.registered_gaps().is_empty());
+    }
+
+    /// Resolved unknowns are answered by the very claims that settled them,
+    /// and the engine refuses unless those claims are genuinely promoted.
+    #[test]
+    fn resolved_unknowns_are_answered_by_their_deciding_claims() {
+        let (ledger, report) = ingested_corpus();
+        let resolved: Vec<_> =
+            register_rows().into_iter().filter(|u| u.resolved.is_some()).collect();
+        assert!(resolved.len() >= 3, "U-1, U-2 and U-10 are resolved");
+
+        for row in &resolved {
+            let gap = report.gap(&row.id).expect("gap exists");
+            let state = ledger.state_of(gap).expect("gap has state");
+            assert_ne!(
+                state,
+                RecordState::Gap(tacit_core::GapState::Registered),
+                "{} is resolved in the register",
+                row.id
+            );
+        }
+
+        // Each answer names a promoted decision claim.
+        for (unknown, decision) in &report.answered {
+            let claim = report.content_claim(decision).expect("decision ingested");
+            assert_eq!(
+                ledger.state_of(claim),
+                Some(RecordState::Claim(ClaimState::Promoted)),
+                "{unknown} is answered by {decision}, which must be promoted"
+            );
+        }
+        assert!(report.answered.iter().any(|(u, d)| u == "U-1" && d == "D-0012"));
+        assert!(report.answered.iter().any(|(u, d)| u == "U-2" && d == "D-0015"));
+    }
+
+    #[test]
+    fn gaps_carry_their_triggers_and_territory() {
+        let (ledger, report) = ingested_corpus();
+        for row in register_rows().iter().filter(|u| u.resolved.is_none()) {
+            let gap = report.gap(&row.id).expect("gap exists");
+            let record = ledger.record(gap).expect("record");
+            assert!(
+                record.envelope().review_trigger().is_some(),
+                "{} carries the trigger that forces it",
+                row.id
+            );
+            let Content::Gap(content) = record.content() else { panic!("{} is a gap", row.id) };
+            assert!(
+                content.territory.contains(&report.unknown(&row.id).unwrap()),
+                "{} covers its own anchor",
+                row.id
+            );
+        }
+    }
+
+    /// Cross-references now resolve in both directions: a decision naming U-1
+    /// and an unknown naming D-0012 both find an anchor.
+    #[test]
+    fn decisions_and_unknowns_cross_link() {
+        let (ledger, report) = ingested_corpus();
+        let projection = Projection::rebuild(&ledger);
+        let view = projection
+            .view(&ledger, ViewSpec::now().with_states(StateFilter::PromotedAndProposed));
+
+        let u1 = report.unknown("U-1").expect("U-1 anchor");
+        let inbound: Vec<_> = view
+            .node(u1)
+            .unwrap()
+            .in_edges()
+            .iter()
+            .map(|e| ledger.entity(e.subject()).unwrap().label().to_string())
+            .collect();
+        assert!(
+            inbound.iter().any(|l| l == "D-0006"),
+            "D-0006 names U-1 in its assertion; got {inbound:?}"
+        );
+
+        // The register's gap for U-1 reaches D-0012 through its territory.
+        let gap = report.gap("U-1").expect("gap");
+        let Content::Gap(content) = ledger.record(gap).unwrap().content() else { panic!() };
+        assert!(content.territory.contains(&report.decision("D-0012").unwrap()));
     }
 
     #[test]

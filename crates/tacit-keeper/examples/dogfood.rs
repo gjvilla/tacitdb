@@ -8,14 +8,14 @@ use tacit_core::{
     Author, ClaimContent, Content, CostSpec, CostTransform, MeasurementTarget, MemoryLedger,
     MissingCost, Projection, RecordState, StateFilter, ViewSpec,
 };
-use tacit_keeper::corpus::{DECISION_KIND, ingest_decisions};
+use tacit_keeper::corpus::{DECISION_KIND, ingest_corpus};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut ledger = MemoryLedger::new();
 
     let before_ingest = jiff::Timestamp::now();
-    let report = ingest_decisions(&mut ledger, &repo_root)?;
+    let report = ingest_corpus(&mut ledger, &repo_root)?;
 
     rule("INGEST");
     println!(
@@ -25,10 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ledger.entities().count()
     );
     println!(
-        "    content claims {:>3}   title claims {:>3}   mention edges {:>3}   verdicts {:>3}",
+        "    content claims {:>3}   title claims {:>3}   mention edges {:>3}",
         report.content_claims.len(),
         report.title_claims.len(),
-        report.mention_claims.len(),
+        report.mention_claims.len()
+    );
+    println!(
+        "    register gaps  {:>3}   verdicts     {:>3}",
+        report.gaps.len(),
         report.verdicts.len()
     );
     println!(
@@ -160,8 +164,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  wrote {} measurements; the governed ledger is unchanged", report.mention_claims.len());
     println!("  log length still {} records", ledger.log().len());
 
-    println!("\n  the corpus's reference graph (proposed edges):");
-    for (from, to, _) in &report.mention_claims {
+    println!(
+        "\n  the corpus's reference graph: {} proposed edges, a sample:",
+        report.mention_claims.len()
+    );
+    for (from, to, _) in report.mention_claims.iter().take(6) {
         println!("    {from} -> {to}");
     }
 
@@ -212,6 +219,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ledger.log().len()
     );
 
+    rule("THE BOUNDARY OF THE RECORD — what Tacit knows it does not know");
+    let gaps = ledger.registered_gaps();
+    println!("  {} registered gaps, from the register's Room 2", gaps.len());
+    println!(
+        "  {} resolved unknowns were answered by the very claims that settled them:",
+        report.answered.len()
+    );
+    for (unknown, decision) in &report.answered {
+        let gap = report.gap(unknown).expect("gap");
+        println!(
+            "    {unknown} -> {} (answered by {decision})",
+            ledger.state_of(gap).expect("state")
+        );
+    }
+    println!("\n  a sample of what remains open:");
+    for gap in gaps.iter().take(3) {
+        let Content::Gap(content) = gap.content() else { continue };
+        let question = content.question.split("\n\n").next().unwrap_or_default();
+        println!("    · {}", truncate(question, 86));
+        if let Some(trigger) = gap.envelope().review_trigger().and_then(|t| t.on_event.clone()) {
+            println!("      trigger: {}", truncate(&trigger, 78));
+        }
+    }
+    println!(
+        "\n  this is what abstention is made of: an agent asked about storage can say\n  \
+         \"that is registered unknown U-5, triggered by the implementation phase\"\n  \
+         rather than inventing an answer or returning nothing."
+    );
+
     rule("KEEPER WORK QUEUE");
     let queue = ledger.review_queue(jiff::Timestamp::now());
     println!("  due for review        {}", queue.due.len());
@@ -235,8 +271,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    · this ledger is in-memory and dies at process exit; docs/DECISIONS.md");
     println!("      remains the authoritative copy, so Tacit does not yet *host* its corpus");
     println!("    · durable storage is U-5 and unresolved");
-    println!("  H-0001(b) advanced by zero this step: tacit-mcp is still a stub.");
-    println!("  Scored honestly: (a) partial, (b) not started, (c) not started.");
+    println!("  H-0001(b) — \"honestly abstain on registered unknowns\" — now has its raw");
+    println!("  material: the open questions are in the ledger, not only in a document.");
+    println!("  But tacit-mcp is still a stub, so no agent can reach any of it yet.");
+    println!("  Scored honestly: (a) partial, (b) groundwork only, (c) not started.");
 
     println!();
     Ok(())

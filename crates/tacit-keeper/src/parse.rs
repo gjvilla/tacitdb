@@ -49,6 +49,12 @@ pub enum ParseError {
 
     #[error("heading is not a record heading: {0:?}")]
     BadHeading(String),
+
+    #[error("register row has {cells} cells, expected 4: {row:?}")]
+    BadRegisterRow { row: String, cells: usize },
+
+    #[error("register lists {id} twice")]
+    DuplicateUnknown { id: String },
 }
 
 /// Keys the ingest understands, partitioned by role. Anything else is an error.
@@ -127,6 +133,16 @@ pub fn is_record_id(candidate: &str) -> bool {
     let bytes = candidate.as_bytes();
     bytes.len() == 6
         && (bytes[0] == b'D' || bytes[0] == b'H')
+        && bytes[1] == b'-'
+        && bytes[2..].iter().all(u8::is_ascii_digit)
+}
+
+/// `U-5` / `U-22`: the register numbers its unknowns without zero-padding, so
+/// the digit count varies where the decision corpus fixes it at four.
+pub fn is_unknown_id(candidate: &str) -> bool {
+    let bytes = candidate.as_bytes();
+    (3..=5).contains(&bytes.len())
+        && bytes[0] == b'U'
         && bytes[1] == b'-'
         && bytes[2..].iter().all(u8::is_ascii_digit)
 }
@@ -315,29 +331,42 @@ fn unwrap_lines(text: &str) -> String {
     text.split('\n').map(str::trim).collect::<Vec<_>>().join(" ").trim().to_string()
 }
 
-/// Every corpus id mentioned in `text`, excluding `self_id`, in first-mention
-/// order. A bare textual mention is all this observes — hence the predicate
-/// name `mentions` rather than anything stronger.
+/// Every corpus id mentioned in `text` — decision ids (`D-0001`, `H-0001`) and
+/// register ids (`U-5`) alike — excluding `self_id`, in first-mention order.
+/// A bare textual mention is all this observes, hence the predicate name
+/// `mentions` rather than anything stronger.
 pub fn mentioned_ids(text: &str, self_id: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut found: Vec<String> = Vec::new();
-    for (i, window) in bytes.windows(6).enumerate() {
-        if !(window[0] == b'D' || window[0] == b'H') || window[1] != b'-' {
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        let is_prefix = matches!(c, b'D' | b'H' | b'U');
+        let boundary_ok =
+            i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'-');
+        if !is_prefix || !boundary_ok || bytes.get(i + 1) != Some(&b'-') {
+            i += 1;
             continue;
         }
-        if !window[2..].iter().all(u8::is_ascii_digit) {
+        // Take the maximal digit run, so "U-10" never reads as "U-1".
+        let digits_start = i + 2;
+        let mut end = digits_start;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        if end == digits_start || bytes.get(end).is_some_and(u8::is_ascii_alphanumeric) {
+            i += 1;
             continue;
         }
-        // Must not be part of a longer token.
-        if i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'-') {
-            continue;
-        }
-        if bytes.get(i + 6).is_some_and(u8::is_ascii_digit) {
-            continue;
-        }
-        let id = String::from_utf8_lossy(window).to_string();
-        if id != self_id && !found.contains(&id) {
-            found.push(id);
+        let candidate = &text[i..end];
+        if is_record_id(candidate) || is_unknown_id(candidate) {
+            let id = candidate.to_string();
+            if id != self_id && !found.contains(&id) {
+                found.push(id);
+            }
+            i = end;
+        } else {
+            i += 1;
         }
     }
     found
@@ -454,7 +483,17 @@ state: promoted
     #[test]
     fn mentions_finds_ids_but_not_the_record_itself() {
         let found = mentioned_ids("resolves U-1 per D-0012 and D-0012 again; see H-0001", "D-0006");
-        assert_eq!(found, vec!["D-0012", "H-0001"]);
+        assert_eq!(found, vec!["U-1", "D-0012", "H-0001"]);
         assert!(mentioned_ids("D-00123 is not an id", "D-0001").is_empty());
+        assert!(mentioned_ids("R-5 and D-001 are not corpus ids", "D-0001").is_empty());
+    }
+
+    /// Register ids are not zero-padded, so the scan must take the maximal
+    /// digit run or "U-10" reads as "U-1".
+    #[test]
+    fn variable_length_register_ids_are_read_whole() {
+        assert_eq!(mentioned_ids("see U-10 and U-1", "U-5"), vec!["U-10", "U-1"]);
+        assert_eq!(mentioned_ids("U-22 is the last", "U-5"), vec!["U-22"]);
+        assert!(mentioned_ids("U-1 only", "U-1").is_empty(), "self is excluded");
     }
 }
