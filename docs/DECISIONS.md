@@ -965,6 +965,61 @@ current view (U-32).
 
 ---
 
+## D-0027 · Trust is asked twice: once when the verdict is made, and again on request
+
+```yaml
+id: D-0027
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: keeper round — resolves U-32
+evidence: [docs/REGISTER.md, docs/DECISIONS.md — this file is the corpus in question]
+review_trigger: when a snapshot or a rewrite makes commits routinely unreachable,
+  or when a weakening should reach someone who is not watching a terminal
+```
+
+**Assertion.** The attestation written into a verdict stays exactly as it was —
+it is the record of what was known when the promotion was made, and nothing may
+edit it. Alongside it, `review_trust` re-asks the repository what those same
+commits verify as today, and sorts every promotion into five: verifying as it
+did, weakened, strengthened, unverifiable, or naming no commit to re-ask about.
+
+**Two readings, both wanted, and only one existed.** The stored attestation
+cannot answer "would we accept this now", and a live check cannot answer "what
+did we know then" — a repository that has been rewritten no longer holds the
+evidence. Keeping the first immutable and computing the second on demand is the
+only arrangement where both questions have an answer.
+
+**A review is a read, and never a write.** A revoked key does not demote a claim.
+Nothing happened in the record; something happened in the world. Writing "this is
+no longer trusted" into the ledger would be a verdict, and no person declared it
+— so what this produces is an alarm, and what a person does about it, retiring
+the claim or replacing it, stays theirs to declare. The engine could not have
+been talked into it either: a verdict needs a human author, and there is no
+human here.
+
+**Strengthening is real and is not an alarm.** A signature from a key the keyring
+had no opinion about becomes a signature from a trusted one the day that key is
+imported. The same machinery reports it, in its own column, because a review
+that only ever brought bad news would be read as an error report rather than as
+a measurement.
+
+**Unverifiable is a third answer, not a weakening.** A commit this repository no
+longer holds — rewritten, collected, or simply absent — cannot be re-asked about,
+and saying so is different from saying the signature failed. This is the cost the
+register predicted, and it is precisely why the recorded reading stays in the
+verdict: it is the one nobody can take away.
+
+**Where it fires.** The host runs the review on the way up, because an alarm
+nobody is standing in front of is not an alarm; it prints the first few and says
+how many more, because a truncated list that does not admit it was truncated
+reads as a complete one. Demonstrated by pointing the same binary at the same
+store with an empty keyring: 52 promotions weakened, both readings shown, and not
+one record altered.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

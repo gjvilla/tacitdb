@@ -54,8 +54,10 @@ impl Attestation {
         Attestation::None { because: because.into() }
     }
 
-    /// How much weight the attestation carries.
-    fn weight(&self) -> u8 {
+    /// How much weight the attestation carries. Ordered, so two attestations
+    /// of the same words made at different times can be compared — which is
+    /// the whole of a trust review (U-32).
+    pub fn strength(&self) -> u8 {
         match self {
             Attestation::Signed { .. } => 3,
             Attestation::UnknownKey { .. } => 2,
@@ -68,6 +70,18 @@ impl Attestation {
     /// verdict when signatures are required.
     pub fn is_signed(&self) -> bool {
         matches!(self, Attestation::Signed { .. })
+    }
+
+    /// The commit these words came from, when the attestation names one. An
+    /// attestation that names none — the uncommitted case — cannot be re-asked
+    /// about, because there is nothing to ask.
+    pub fn commit(&self) -> Option<&str> {
+        match self {
+            Attestation::Signed { commit, .. }
+            | Attestation::UnknownKey { commit, .. }
+            | Attestation::Unsigned { commit, .. } => Some(commit),
+            Attestation::None { .. } => Option::None,
+        }
     }
 
     /// The identity the signature is bound to, when there is one.
@@ -92,7 +106,7 @@ impl Attestation {
     /// lines around it are. Those words did get there unsigned.
     pub fn weakest<'a>(over: impl IntoIterator<Item = &'a Attestation>) -> Attestation {
         over.into_iter()
-            .min_by_key(|a| a.weight())
+            .min_by_key(|a| a.strength())
             .cloned()
             .unwrap_or_else(|| Attestation::unattested("the span is empty"))
     }
@@ -210,46 +224,13 @@ pub fn blame(repo_root: &Path, relative: &str) -> Blame {
         }
     }
 
-    let shas: Vec<&str> = {
-        let mut seen: Vec<&str> = order.iter().map(String::as_str).collect();
+    let shas: Vec<String> = {
+        let mut seen: Vec<String> = order.to_vec();
         seen.sort_unstable();
         seen.dedup();
         seen.into_iter().filter(|s| !s.is_empty() && !is_uncommitted(s)).collect()
     };
-    let mut commits: BTreeMap<String, Attestation> = BTreeMap::new();
-    if !shas.is_empty() {
-        // Unit separators, because a signer's name has spaces in it and the
-        // trust question is not one to lose to a parse.
-        let mut args = vec!["log", "--no-walk", "--format=%H%x1f%G?%x1f%GK%x1f%GS%x1f%an"];
-        args.extend(shas.iter().copied());
-        if let Ok(text) = run(repo_root, &args) {
-            for line in text.lines() {
-                let fields: Vec<&str> = line.split('\u{1f}').collect();
-                let [sha, status, key, signer, author] = fields[..] else { continue };
-                let commit: String = sha.chars().take(7).collect();
-                let attestation = match status.trim() {
-                    // G is git's own verdict that the key is one this machine
-                    // trusts. U is a good signature from a key it knows nothing
-                    // about — which is what an agent's freshly minted key looks
-                    // like, so it is not the same answer.
-                    "G" => Attestation::Signed {
-                        commit,
-                        key: key.trim().to_string(),
-                        signer: strip_address(signer),
-                    },
-                    "U" => Attestation::UnknownKey {
-                        commit,
-                        key: key.trim().to_string(),
-                        signer: strip_address(signer),
-                    },
-                    // B bad, E unverifiable, X expired, Y expired key,
-                    // R revoked key, N none. None of them vouch for anything.
-                    _ => Attestation::Unsigned { commit, by: author.trim().to_string() },
-                };
-                commits.insert(sha.to_string(), attestation);
-            }
-        }
-    }
+    let commits = verify(repo_root, &shas);
 
     let by_line = order
         .into_iter()
@@ -264,6 +245,61 @@ pub fn blame(repo_root: &Path, relative: &str) -> Blame {
         .collect();
 
     Blame { by_line, whole_file: Option::None }
+}
+
+/// Ask git what it makes of each commit's signature, in one call.
+///
+/// The one place the trust decision is made, shared by the ingest and by a
+/// later review, so the two can never answer the same question differently.
+/// A commit git cannot resolve is simply absent from the result: `--ignore-
+/// missing` means one unreachable object does not cost the answer about all
+/// the others.
+fn verify(repo_root: &Path, shas: &[String]) -> BTreeMap<String, Attestation> {
+    let mut commits = BTreeMap::new();
+    if shas.is_empty() {
+        return commits;
+    }
+    // Unit separators, because a signer's name has spaces in it and the trust
+    // question is not one to lose to a parse.
+    let mut args = vec![
+        "log".to_string(),
+        "--no-walk".to_string(),
+        "--ignore-missing".to_string(),
+        "--format=%H%x1f%G?%x1f%GK%x1f%GS%x1f%an".to_string(),
+    ];
+    args.extend(shas.iter().cloned());
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Ok(text) = run(repo_root, &borrowed) else { return commits };
+
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split('\u{1f}').collect();
+        let [sha, status, key, signer, author] = fields[..] else { continue };
+        let commit: String = sha.chars().take(7).collect();
+        let attestation = match status.trim() {
+            // G is git's own verdict that the key is one this machine trusts.
+            // U is a good signature from a key it knows nothing about — which
+            // is what an agent's freshly minted key looks like, so it is not
+            // the same answer.
+            "G" => Attestation::Signed {
+                commit,
+                key: key.trim().to_string(),
+                signer: strip_address(signer),
+            },
+            "U" => Attestation::UnknownKey {
+                commit,
+                key: key.trim().to_string(),
+                signer: strip_address(signer),
+            },
+            // B bad, E unverifiable, X expired, Y expired key, R revoked key,
+            // N none. None of them vouch for anything.
+            _ => Attestation::Unsigned { commit, by: author.trim().to_string() },
+        };
+        // Keyed by the full sha for blame, and by the short one so a review
+        // can look up what an attestation recorded.
+        commits.insert(sha.to_string(), attestation.clone());
+        commits.insert(sha.chars().take(7).collect(), attestation);
+    }
+    commits
 }
 
 /// `Greg Villa <someone@example.com>` → `Greg Villa`. The key is the identity
@@ -326,6 +362,136 @@ pub fn unattested_promotions(ledger: &Ledger) -> Vec<(RecordId, String)> {
         }
     }
     found
+}
+
+/// What a commit's signature verifies as now, set against what it verified as
+/// when the verdict was made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verified {
+    /// It verifies exactly as it did. The ordinary answer.
+    Unchanged,
+    /// It verifies differently now: a key trusted since, or revoked since.
+    Changed(Attestation),
+    /// This repository can no longer speak about the commit — rewritten,
+    /// collected, or simply not here.
+    Unverifiable { because: String },
+    /// The attestation named no commit, so there is nothing to re-ask about.
+    /// A verdict transcribed over an uncommitted draft stays that way forever:
+    /// committing the file afterwards writes a new commit, and the verdict was
+    /// made before it existed.
+    NothingToCheck,
+}
+
+/// One promoted claim, what its promotion recorded, and what that same commit
+/// says today.
+#[derive(Debug, Clone)]
+pub struct Recheck {
+    pub claim: RecordId,
+    pub recorded: Attestation,
+    pub today: Verified,
+}
+
+/// Every promoted claim, re-asked.
+///
+/// `unchanged` is a count rather than a list because nobody wants fifty rows
+/// saying nothing happened; every row that is not "nothing happened" is here in
+/// full.
+#[derive(Debug, Default)]
+pub struct TrustReview {
+    pub unchanged: usize,
+    /// Promotions a signature no longer backs the way it did — the alarm. A key
+    /// revoked, or one dropped from the keyring.
+    pub weakened: Vec<Recheck>,
+    /// Promotions that verify better now than when they were made: usually a
+    /// signer's key trusted since.
+    pub strengthened: Vec<Recheck>,
+    pub unverifiable: Vec<Recheck>,
+    pub nothing_to_recheck: Vec<Recheck>,
+}
+
+impl TrustReview {
+    /// Whether anything here needs a person. Only a weakening does: the rest is
+    /// either fine, better than it was, or unanswerable.
+    pub fn quiet(&self) -> bool {
+        self.weakened.is_empty()
+    }
+}
+
+/// Ask the repository what it makes today of the commits this ledger's
+/// promotions rest on.
+///
+/// **A read, and deliberately never a write.** A revoked key does not demote a
+/// claim, because nothing happened in the record — something happened in the
+/// world. Writing "this is no longer trusted" into the ledger would be a
+/// verdict, and no person declared it. What this produces is an alarm; what a
+/// person does about it, retiring the claim or replacing it, is theirs to
+/// declare.
+///
+/// The cost the register named holds: this depends on the repository being
+/// present and the commit still reachable, so a rebase or a collection turns an
+/// answer into `Unverifiable`. That is why the recorded attestation stays in
+/// the verdict — it is the reading that cannot be taken away.
+pub fn review_trust(ledger: &Ledger, repo_root: &Path) -> TrustReview {
+    let mut review = TrustReview::default();
+    let mut rows: Vec<(RecordId, Attestation)> = Vec::new();
+
+    for claim in ledger.promoted_claims() {
+        for verdict in ledger.history(claim.id()) {
+            let Content::Verdict(v) = verdict.content() else { continue };
+            if !matches!(&v.action, VerdictAction::Promote { target, .. } if *target == claim.id()) {
+                continue;
+            }
+            let Some(recorded) = verdict
+                .envelope()
+                .author()
+                .detail
+                .as_deref()
+                .and_then(Attestation::parse)
+            else {
+                continue;
+            };
+            rows.push((claim.id(), recorded));
+        }
+    }
+
+    let shas: Vec<String> = {
+        let mut seen: Vec<String> =
+            rows.iter().filter_map(|(_, a)| a.commit()).map(str::to_string).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    };
+    let today = verify(repo_root, &shas);
+
+    for (claim, recorded) in rows {
+        let verified = classify(&recorded, recorded.commit().and_then(|c| today.get(c)));
+        let row = Recheck { claim, recorded: recorded.clone(), today: verified.clone() };
+        match verified {
+            Verified::Unchanged => review.unchanged += 1,
+            Verified::NothingToCheck => review.nothing_to_recheck.push(row),
+            Verified::Unverifiable { .. } => review.unverifiable.push(row),
+            Verified::Changed(now) if now.strength() < recorded.strength() => {
+                review.weakened.push(row)
+            }
+            Verified::Changed(_) => review.strengthened.push(row),
+        }
+    }
+    review
+}
+
+/// The whole of the judgement, with the subprocess left outside it: what a
+/// recorded attestation means set against what the same commit says now.
+fn classify(recorded: &Attestation, now: Option<&Attestation>) -> Verified {
+    let Some(commit) = recorded.commit() else { return Verified::NothingToCheck };
+    match now {
+        Option::None => {
+            Verified::Unverifiable { because: format!("this repository has no commit {commit}") }
+        }
+        // Compared by strength rather than by equality: a signer renaming their
+        // key's identity is not a change in what the signature is worth.
+        Some(now) if now.strength() == recorded.strength() => Verified::Unchanged,
+        Some(now) => Verified::Changed(now.clone()),
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +576,116 @@ mod tests {
     fn the_signers_address_stays_out_of_the_record() {
         assert_eq!(strip_address("Greg Villa <someone@example.com>"), "Greg Villa");
         assert_eq!(strip_address("Greg Villa"), "Greg Villa");
+    }
+
+    #[test]
+    fn a_key_that_stops_being_trusted_weakens_what_it_signed() {
+        let recorded = signed("d6eb4a8", "Greg Villa");
+        let revoked = Attestation::Unsigned { commit: "d6eb4a8".into(), by: "Greg Villa".into() };
+        let stranger = Attestation::UnknownKey {
+            commit: "d6eb4a8".into(),
+            key: "F63F9CB7003A73E3".into(),
+            signer: "Greg Villa".into(),
+        };
+
+        // The alarm: the same commit, a keyring that no longer vouches for it.
+        assert_eq!(classify(&recorded, Some(&revoked)), Verified::Changed(revoked.clone()));
+        assert!(revoked.strength() < recorded.strength());
+        assert_eq!(classify(&recorded, Some(&stranger)), Verified::Changed(stranger.clone()));
+
+        // The other direction is real too, and is not an alarm: a signer's key
+        // imported into the keyring since.
+        assert_eq!(classify(&stranger, Some(&recorded)), Verified::Changed(recorded.clone()));
+        assert!(recorded.strength() > stranger.strength());
+
+        assert_eq!(classify(&recorded, Some(&recorded)), Verified::Unchanged);
+        assert!(matches!(classify(&recorded, Option::None), Verified::Unverifiable { .. }));
+        // A verdict made over an uncommitted draft names no commit, so there is
+        // nothing to re-ask and it stays that way for good.
+        assert_eq!(
+            classify(&Attestation::unattested("these lines are not committed"), Option::None),
+            Verified::NothingToCheck
+        );
+    }
+
+    #[test]
+    fn a_trust_review_of_this_repository_finds_nothing_weakened() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut ledger = tacit_core::Ledger::new();
+        crate::corpus::ingest_corpus(&mut ledger, &root).expect("ingest");
+
+        let review = review_trust(&ledger, &root);
+        // Stable whatever the working tree is doing: an uncommitted record
+        // lands in `nothing_to_recheck`, never in `weakened`.
+        assert!(review.quiet(), "weakened: {:?}", review.weakened);
+        assert!(review.strengthened.is_empty());
+        assert!(review.unverifiable.is_empty());
+        assert!(
+            review.unchanged + review.nothing_to_recheck.len() > 0,
+            "the corpus has promotions to re-ask about"
+        );
+    }
+
+    /// The cost the register named, made concrete: an attestation naming a
+    /// commit this repository no longer has is unanswerable, and that is a
+    /// third answer rather than a weakening.
+    #[test]
+    fn a_commit_the_repository_has_lost_is_unverifiable_not_weakened() {
+        use tacit_core::{Author, AuthorKind, ClaimContent, Draft, SourceRef, VerdictAction,
+                         VerdictContent};
+
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut ledger = tacit_core::Ledger::new();
+        let subject = ledger.add_entity("decision", "D-0001").unwrap();
+        let claim = ledger
+            .append(Draft::new(
+                Author::human("Greg Villa"),
+                SourceRef::channel("corpus-ingest"),
+                Content::Claim(ClaimContent::Text {
+                    body: "four forces".into(),
+                    about: vec![subject],
+                }),
+            ))
+            .unwrap();
+        ledger
+            .append(Draft::new(
+                Author {
+                    name: "Greg Villa".into(),
+                    kind: AuthorKind::Human,
+                    detail: Some(
+                        signed("fffffff", "Greg Villa").to_string(),
+                    ),
+                },
+                SourceRef::channel("corpus-ingest"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Promote { target: claim, retiring: Option::None },
+                    rationale: Option::None,
+                }),
+            ))
+            .unwrap();
+
+        let review = review_trust(&ledger, &root);
+        assert!(review.quiet(), "a lost commit is not evidence of a weakening");
+        assert_eq!(review.unverifiable.len(), 1);
+        assert_eq!(review.unverifiable[0].claim, claim);
+        // And the recorded reading survives, which is the point of writing it
+        // into the verdict rather than only checking it at the door.
+        assert!(review.unverifiable[0].recorded.is_signed());
+    }
+
+    #[test]
+    fn a_review_is_a_read_and_leaves_the_ledger_where_it_found_it() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut ledger = tacit_core::Ledger::new();
+        crate::corpus::ingest_corpus(&mut ledger, &root).expect("ingest");
+        let before = ledger.log().len();
+
+        let _ = review_trust(&ledger, &root);
+
+        // A revoked key does not demote a claim. Nothing happened in the
+        // record — something happened in the world — and saying otherwise
+        // would be a verdict no person declared.
+        assert_eq!(ledger.log().len(), before);
     }
 
     #[test]

@@ -78,6 +78,7 @@ check that no record was written *about* it.
 | G-18 | does the review inbox list every unreviewed claim | answer D-0024 | Greg Villa | when an author can retract a proposal outright |
 | G-19 | what stops someone editing a file from promoting a claim | answer D-0025 (pending U-23) | Greg Villa | when U-31 resolves |
 | G-20 | which signing keys does the project accept for verdicts | answer D-0026 (pending U-23) | Greg Villa | when U-32 resolves |
+| G-21 | what happens to an old promotion when a signing key is revoked | answer D-0027 | Greg Villa | when a weakening must reach someone away from a terminal |
 | G-11 | how does sharding across geographic regions work | abstain | Greg Villa | never — this is outside the record by design |
 | G-12 | what is the maximum supported cluster size | abstain | Greg Villa | never — this is outside the record by design |
 | G-13 | how many concurrent writers does the store support | abstain | Greg Villa | when U-5 resolves |

@@ -16,7 +16,7 @@ pub use corpus::{
     IngestReport, MENTIONS, REGISTER_DOC, UNKNOWN_KIND, ingest_corpus, ingest_corpus_with,
     ingest_decisions, ingest_text, ingest_text_with,
 };
-pub use attest::{Attestation, Blame};
+pub use attest::{Attestation, Blame, Recheck, TrustReview, Verified, review_trust};
 pub use origin::Origin;
 pub use golden::{Expectation, GoldenQuestion, Graded, Scorecard, Verdict, parse_golden};
 pub use parse::{ParseError, ParsedRecord, parse_corpus};

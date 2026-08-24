@@ -327,6 +327,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  a verdict's own account of itself:");
         println!("    {sample}");
     }
+    let review = tacit_keeper::review_trust(&ledger, &repo_root);
+    println!();
+    println!("  And re-asked today, because a key can stop being trusted after it signs:");
+    println!(
+        "    {} verify as they did · {} weakened · {} strengthened · {} unverifiable · {} \
+         nothing to re-ask",
+        review.unchanged,
+        review.weakened.len(),
+        review.strengthened.len(),
+        review.unverifiable.len(),
+        review.nothing_to_recheck.len()
+    );
+    println!("  A weakening changes nothing in the record. Something happened in the world,");
+    println!("  not in the ledger, and retiring what a revoked key signed is a person's");
+    println!("  verdict to declare — so this is an alarm and never a write (D-0027).");
     println!();
     println!("  Run the host with --require-signature, or --signed-by NAME to say whose");
     println!("  signature carries a verdict, and a promotion that does not meet it is not");

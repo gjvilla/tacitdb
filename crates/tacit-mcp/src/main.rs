@@ -179,6 +179,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     }
 
+    // A weakened attestation is a drift alarm, and an alarm nobody is standing
+    // in front of is not an alarm. One git call, on the way up (U-32).
+    if let Some(root) = &corpus {
+        let review = tacit_keeper::review_trust(&ledger, root);
+        if !review.quiet() {
+            eprintln!(
+                "tacit-mcp: {} promotion(s) rest on a signature that no longer verifies as \
+                 it did when the verdict was made:",
+                review.weakened.len()
+            );
+            const SHOWN: usize = 5;
+            for row in review.weakened.iter().take(SHOWN) {
+                let now = match &row.today {
+                    tacit_keeper::Verified::Changed(now) => now.to_string(),
+                    other => format!("{other:?}"),
+                };
+                eprintln!("tacit-mcp:   {} was {} and is now {now}", row.claim, row.recorded);
+            }
+            // Said rather than silently swallowed: a truncated list that does
+            // not say it was truncated reads as a complete one.
+            if let Some(rest) = review.weakened.len().checked_sub(SHOWN).filter(|n| *n > 0) {
+                eprintln!("tacit-mcp:   ... and {rest} more, all of them still in the record");
+            }
+            eprintln!(
+                "tacit-mcp:   Nothing has been changed in the record. A key that stopped \
+                 being trusted is not a verdict, and retiring what it signed is a person's \
+                 to declare."
+            );
+        }
+    }
+
     let durable = ledger.journal_path().map(|p| p.display().to_string());
     let state = Arc::new(Mutex::new(Store::new(ledger)));
     eprintln!(
