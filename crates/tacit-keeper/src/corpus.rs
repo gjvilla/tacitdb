@@ -113,17 +113,55 @@ pub enum IngestError {
 
 /// How much a transcribed verdict must be able to show for itself.
 ///
-/// The ingest reads `state: promoted` out of prose and asserts that a person
-/// declared it. `Observe` records what git can establish about who put those
-/// words there and carries on, which is right for a document its author is
-/// still editing. `RequireSignature` declines to transcribe a verdict whose
-/// text no signed commit carries — for a corpus something other than a person
-/// can write to (U-29).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// `Observe` records what git can establish about who put the words there and
+/// carries on, which is right for a document its author is still editing.
+/// `RequireSignature` declines a verdict whose text no commit signed by a
+/// trusted key carries. `RequireSignatureFrom` adds the other half of U-31 —
+/// *whose* signature — by naming the signers whose verdicts count.
+///
+/// The names come from the caller and never from the repository, which is the
+/// whole point: a list of who may promote, kept in the file it protects, is not
+/// a trust root. It is one more file an agent can edit.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Attest {
     #[default]
     Observe,
     RequireSignature,
+    /// Signed by a trusted key *and* by one of these signers, matched against
+    /// the identity the signature is bound to rather than the commit's author
+    /// field, which is free text. An empty set asks only for the signature.
+    RequireSignatureFrom(BTreeSet<String>),
+}
+
+impl Attest {
+    /// Whether a verdict resting on this attestation may be transcribed, and
+    /// the reason when it may not — the reason is the part worth reporting.
+    pub fn admits(&self, attestation: &Attestation) -> Result<(), String> {
+        match self {
+            Attest::Observe => Ok(()),
+            Attest::RequireSignature | Attest::RequireSignatureFrom(_)
+                if !attestation.is_signed() =>
+            {
+                Err(format!("no commit signed by a trusted key carries these words ({attestation})"))
+            }
+            Attest::RequireSignatureFrom(signers) if !signers.is_empty() => {
+                let signer = attestation.signer().unwrap_or_default();
+                // Exact, because a loose match is a sharp edge: "Greg" would
+                // admit every Gregory who ever signed anything. The error names
+                // the identity it actually saw, so a caller who mistypes is
+                // told what to type.
+                if signers.iter().any(|allowed| allowed.trim() == signer) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "signed by {signer}, who is not named as a bearer of verdicts \
+                         ({attestation})"
+                    ))
+                }
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// What can be established about who wrote each corpus document, and how much
@@ -161,9 +199,8 @@ impl Attestations {
         self.register.over((line, line))
     }
 
-    /// Whether a verdict resting on this attestation may be transcribed.
-    fn admits(&self, attestation: &Attestation) -> bool {
-        self.policy == Attest::Observe || attestation.is_signed()
+    fn admits(&self, attestation: &Attestation) -> Result<(), String> {
+        self.policy.admits(attestation)
     }
 }
 
@@ -283,8 +320,8 @@ pub struct IngestReport {
     /// this is a report and not an error.
     pub unreadable_provenance: bool,
     /// Verdicts the document asserts that this run declined to transcribe,
-    /// because no signed commit carries the words asserting them, with the
-    /// attestation that fell short.
+    /// with the reason: nothing signed carries the words asserting them, or
+    /// the signature is not one this run accepts.
     pub withheld: Vec<(String, String)>,
     /// Verdicts transcribed with nothing established about who wrote them.
     /// Recorded in the verdict itself as well, so it stays answerable later.
@@ -465,7 +502,7 @@ pub fn ingest_text_with(
         ingest_one(ledger, record, &origin, &prior, repo_root, &mut seen, &mut retiring, &mut report)?;
         if let Some(old) = abandoning
             && let attestation = attest.decisions(record.lines)
-            && attest.admits(&attestation)
+            && attest.admits(&attestation).is_ok()
         {
             let verdict = ledger.append(Draft::new(
                 transcriber(record.require("author")?, &attestation),
@@ -565,16 +602,17 @@ pub fn ingest_text_with(
                         .find(|(k, _)| *k == record.id)
                         .map(|(_, r)| *r),
                 ];
-                if !attest.admits(&attestation)
+                if let Err(why) = attest.admits(&attestation)
                     && targets.iter().flatten().any(|t| {
                         ledger.state_of(*t) == Some(RecordState::Claim(ClaimState::Proposed))
                     })
                 {
-                    // The document asserts a promotion and nothing signed
-                    // carries the words asserting it. Declining leaves the
-                    // claim proposed, which is the safe direction to fail: the
-                    // record still loads, and nobody was promoted by prose.
-                    report.withheld.push((record.id.clone(), attestation.to_string()));
+                    // The document asserts a promotion and nothing this run
+                    // will accept carries the words asserting it. Declining
+                    // leaves the claim proposed, which is the safe direction to
+                    // fail: the record still loads, and nobody was promoted by
+                    // prose.
+                    report.withheld.push((record.id.clone(), why));
                     continue;
                 }
                 if matches!(attestation, Attestation::None { .. }) {
@@ -653,8 +691,8 @@ pub fn ingest_text_with(
             // Marking a question resolved is a verdict too, and the register is
             // as editable as the decision document is.
             let attestation = attest.register(unknown.line);
-            if !attest.admits(&attestation) {
-                report.withheld.push((unknown.id.clone(), attestation.to_string()));
+            if let Err(why) = attest.admits(&attestation) {
+                report.withheld.push((unknown.id.clone(), why));
                 continue;
             }
             if matches!(attestation, Attestation::None { .. }) {
@@ -1110,6 +1148,68 @@ mod tests {
                 verdict.id()
             );
         }
+    }
+
+    #[test]
+    fn naming_the_signers_is_the_other_half_of_whose_signature_counts() {
+        let key = "F63F9CB7003A73E3";
+        let mine = |signer: &str| Attestation::Signed {
+            commit: "d6eb4a8".into(),
+            key: key.into(),
+            signer: signer.into(),
+        };
+        let stranger_key = Attestation::UnknownKey {
+            commit: "d6eb4a8".into(),
+            key: "0000000000000000".into(),
+            signer: "Greg Villa".into(),
+        };
+
+        // Asking only for a signature accepts any key this machine trusts,
+        // whoever holds it.
+        let any = Attest::RequireSignature;
+        assert!(any.admits(&mine("Greg Villa")).is_ok());
+        assert!(any.admits(&mine("A Colleague")).is_ok());
+
+        let named = Attest::RequireSignatureFrom(["Greg Villa".to_string()].into());
+        assert!(named.admits(&mine("Greg Villa")).is_ok());
+        let why = named.admits(&mine("A Colleague")).unwrap_err();
+        assert!(why.contains("not named as a bearer of verdicts"), "got {why}");
+        // Exact: a loose match would admit every Gregory who ever signed
+        // anything, and the error names what it saw so a mistype is fixable.
+        assert!(Attest::RequireSignatureFrom(["Greg".to_string()].into())
+            .admits(&mine("Greg Villa"))
+            .is_err());
+        assert!(named.admits(&mine("Greg Villa Jr")).is_err());
+
+        // And the right name on a key nobody vouched for is still nothing: the
+        // name is matched against the identity the *signature* binds, not
+        // against a field anyone can type.
+        assert!(named.admits(&stranger_key).is_err());
+        assert!(any.admits(&stranger_key).is_err());
+
+        // Observing asks for nothing, which is what makes it usable over a
+        // document its author is still writing.
+        assert!(Attest::Observe.admits(&stranger_key).is_ok());
+    }
+
+    #[test]
+    fn a_signer_this_repository_never_had_carries_no_verdict() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        let report = ingest_corpus_with(
+            &mut ledger,
+            &root,
+            Attest::RequireSignatureFrom(["Nobody Of That Name".to_string()].into()),
+        )
+        .expect("ingest");
+
+        // Whatever the state of the working tree, nothing survives a policy
+        // that names a signer this repository has never had — and the corpus
+        // still loads, every claim of it waiting on a person.
+        assert!(report.verdicts.is_empty());
+        assert!(!report.withheld.is_empty());
+        assert_eq!(ledger.promoted_claims().count(), 0);
+        assert!(!report.content_claims.is_empty(), "the claims are still ingested");
     }
 
     #[test]

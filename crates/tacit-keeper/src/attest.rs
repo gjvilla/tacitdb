@@ -29,11 +29,21 @@ use tacit_core::{ClaimState, Content, Ledger, RecordId, RecordState, VerdictActi
 
 /// What could be established about the edit that put a record's current text in
 /// its document.
+///
+/// Four rungs, because "signed" turned out to mean two different things. Git's
+/// own verdict (`%G?`) separates a signature it can verify *and trust* from one
+/// it can merely verify: the first rests on a keyring this machine holds, the
+/// second on a key that arrived with the commit. Collapsing them, as this
+/// module first did, accepts a key an agent generated a second earlier — which
+/// is most of what U-31 was asking about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attestation {
-    /// A commit carries the text and git verified a signature over it.
-    Signed { commit: String, by: String },
-    /// A commit carries the text and no signature could be verified.
+    /// Git verified the signature against a key this machine trusts.
+    Signed { commit: String, key: String, signer: String },
+    /// A signature git could verify, made with a key it has no reason to
+    /// trust. Evidence of *a* signer, never of *the* signer.
+    UnknownKey { commit: String, key: String, signer: String },
+    /// No usable signature: absent, bad, expired, or made with a revoked key.
     Unsigned { commit: String, by: String },
     /// Nothing can be established.
     None { because: String },
@@ -44,18 +54,34 @@ impl Attestation {
         Attestation::None { because: because.into() }
     }
 
-    /// How much weight the attestation carries: signed beats unsigned beats
-    /// nothing.
+    /// How much weight the attestation carries.
     fn weight(&self) -> u8 {
         match self {
-            Attestation::Signed { .. } => 2,
+            Attestation::Signed { .. } => 3,
+            Attestation::UnknownKey { .. } => 2,
             Attestation::Unsigned { .. } => 1,
             Attestation::None { .. } => 0,
         }
     }
 
+    /// Signed by a key this machine trusts — the only rung that carries a
+    /// verdict when signatures are required.
     pub fn is_signed(&self) -> bool {
         matches!(self, Attestation::Signed { .. })
+    }
+
+    /// The identity the signature is bound to, when there is one.
+    ///
+    /// Deliberately not the commit's author field, which is free text anyone
+    /// can set. This comes from the signature itself, so it is the one identity
+    /// in a commit that is worth matching a name against.
+    pub fn signer(&self) -> Option<&str> {
+        match self {
+            Attestation::Signed { signer, .. } | Attestation::UnknownKey { signer, .. } => {
+                Some(signer)
+            }
+            _ => None,
+        }
     }
 
     /// The weakest attestation over a span, which is the one that governs.
@@ -76,37 +102,48 @@ impl Attestation {
     pub fn parse(detail: &str) -> Option<Self> {
         let rest = detail.strip_prefix("attest:")?;
         let (kind, rest) = rest.split_once(' ')?;
+        let three = |rest: &str| -> Option<(String, String, String)> {
+            let (commit, rest) = rest.strip_prefix("commit:")?.split_once(" key:")?;
+            let (key, signer) = rest.split_once(" signer:")?;
+            (!commit.is_empty() && !key.is_empty() && !signer.is_empty())
+                .then(|| (commit.into(), key.into(), signer.into()))
+        };
         match kind {
-            "signed" | "unsigned" => {
-                let commit = rest.strip_prefix("commit:")?;
-                let (commit, by) = commit.split_once(" by:")?;
-                let (commit, by) = (commit.to_string(), by.to_string());
-                if commit.is_empty() || by.is_empty() {
-                    return None;
-                }
-                Some(if kind == "signed" {
-                    Attestation::Signed { commit, by }
-                } else {
-                    Attestation::Unsigned { commit, by }
-                })
+            "signed" => three(rest).map(|(commit, key, signer)| Attestation::Signed {
+                commit,
+                key,
+                signer,
+            }),
+            "unknown-key" => three(rest).map(|(commit, key, signer)| Attestation::UnknownKey {
+                commit,
+                key,
+                signer,
+            }),
+            "unsigned" => {
+                let (commit, by) = rest.strip_prefix("commit:")?.split_once(" by:")?;
+                (!commit.is_empty() && !by.is_empty())
+                    .then(|| Attestation::Unsigned { commit: commit.into(), by: by.into() })
             }
             "none" => {
                 let because = rest.strip_prefix("because:")?;
                 (!because.is_empty()).then(|| Attestation::unattested(because))
             }
-            _ => None,
+            _ => Option::None,
         }
     }
 }
 
 impl fmt::Display for Attestation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The signer's name and key, not their address: the key is the identity
+        // that actually binds, and an email in a personal project's permanent
+        // records buys nothing to make up for carrying it.
         match self {
-            // The committer's name and not their address: the name is the
-            // identity a reader recognises, and an email in a personal
-            // project's records buys nothing to make up for carrying it.
-            Attestation::Signed { commit, by } => {
-                write!(f, "attest:signed commit:{commit} by:{by}")
+            Attestation::Signed { commit, key, signer } => {
+                write!(f, "attest:signed commit:{commit} key:{key} signer:{signer}")
+            }
+            Attestation::UnknownKey { commit, key, signer } => {
+                write!(f, "attest:unknown-key commit:{commit} key:{key} signer:{signer}")
             }
             Attestation::Unsigned { commit, by } => {
                 write!(f, "attest:unsigned commit:{commit} by:{by}")
@@ -157,13 +194,13 @@ pub fn blame(repo_root: &Path, relative: &str) -> Blame {
         Err(why) => return Blame::unattested(why),
     };
 
-    let mut authors: BTreeMap<String, String> = BTreeMap::new();
+    // Blame answers which commit put each line here. Everything else about
+    // those commits comes from one `log` call below, so the number of times git
+    // runs is bounded by the number of documents, not the number of lines.
     let mut order: Vec<String> = Vec::new();
     let mut current = String::new();
     for line in porcelain.lines() {
-        if let Some(name) = line.strip_prefix("author ") {
-            authors.insert(current.clone(), name.to_string());
-        } else if line.starts_with('\t') {
+        if line.starts_with('\t') {
             order.push(std::mem::take(&mut current));
         } else if let Some((sha, _)) = line.split_once(' ')
             && sha.len() == 40
@@ -173,26 +210,43 @@ pub fn blame(repo_root: &Path, relative: &str) -> Blame {
         }
     }
 
-    // One call for every commit involved rather than one per line: %G? is git's
-    // own verdict on the signature, so the trust decision stays git's.
     let shas: Vec<&str> = {
         let mut seen: Vec<&str> = order.iter().map(String::as_str).collect();
         seen.sort_unstable();
         seen.dedup();
         seen.into_iter().filter(|s| !s.is_empty() && !is_uncommitted(s)).collect()
     };
-    let mut signed: BTreeMap<String, bool> = BTreeMap::new();
+    let mut commits: BTreeMap<String, Attestation> = BTreeMap::new();
     if !shas.is_empty() {
-        let mut args = vec!["log", "--no-walk", "--format=%H %G?"];
+        // Unit separators, because a signer's name has spaces in it and the
+        // trust question is not one to lose to a parse.
+        let mut args = vec!["log", "--no-walk", "--format=%H%x1f%G?%x1f%GK%x1f%GS%x1f%an"];
         args.extend(shas.iter().copied());
         if let Ok(text) = run(repo_root, &args) {
             for line in text.lines() {
-                if let Some((sha, status)) = line.split_once(' ') {
-                    // G is a good signature; U is good from a key of unknown
-                    // validity. Everything else — bad, expired, revoked, or
-                    // absent — is not something to call signed.
-                    signed.insert(sha.to_string(), matches!(status.trim(), "G" | "U"));
-                }
+                let fields: Vec<&str> = line.split('\u{1f}').collect();
+                let [sha, status, key, signer, author] = fields[..] else { continue };
+                let commit: String = sha.chars().take(7).collect();
+                let attestation = match status.trim() {
+                    // G is git's own verdict that the key is one this machine
+                    // trusts. U is a good signature from a key it knows nothing
+                    // about — which is what an agent's freshly minted key looks
+                    // like, so it is not the same answer.
+                    "G" => Attestation::Signed {
+                        commit,
+                        key: key.trim().to_string(),
+                        signer: strip_address(signer),
+                    },
+                    "U" => Attestation::UnknownKey {
+                        commit,
+                        key: key.trim().to_string(),
+                        signer: strip_address(signer),
+                    },
+                    // B bad, E unverifiable, X expired, Y expired key,
+                    // R revoked key, N none. None of them vouch for anything.
+                    _ => Attestation::Unsigned { commit, by: author.trim().to_string() },
+                };
+                commits.insert(sha.to_string(), attestation);
             }
         }
     }
@@ -203,17 +257,20 @@ pub fn blame(repo_root: &Path, relative: &str) -> Blame {
             if is_uncommitted(&sha) {
                 return Attestation::unattested("these lines are not committed");
             }
-            let by = authors.get(&sha).cloned().unwrap_or_else(|| "unknown".into());
-            let commit = sha.chars().take(7).collect();
-            if signed.get(&sha).copied().unwrap_or(false) {
-                Attestation::Signed { commit, by }
-            } else {
-                Attestation::Unsigned { commit, by }
-            }
+            commits.get(&sha).cloned().unwrap_or_else(|| {
+                Attestation::unattested("git would not say who wrote these lines")
+            })
         })
         .collect();
 
-    Blame { by_line, whole_file: None }
+    Blame { by_line, whole_file: Option::None }
+}
+
+/// `Greg Villa <someone@example.com>` → `Greg Villa`. The key is the identity
+/// that binds; the address adds nothing the record needs and would put a
+/// personal address in every verdict.
+fn strip_address(signer: &str) -> String {
+    signer.split('<').next().unwrap_or(signer).trim().to_string()
 }
 
 fn is_uncommitted(sha: &str) -> bool {
@@ -275,11 +332,24 @@ pub fn unattested_promotions(ledger: &Ledger) -> Vec<(RecordId, String)> {
 mod tests {
     use super::*;
 
+    fn signed(commit: &str, signer: &str) -> Attestation {
+        Attestation::Signed {
+            commit: commit.into(),
+            key: "F63F9CB7003A73E3".into(),
+            signer: signer.into(),
+        }
+    }
+
     #[test]
     fn an_attestation_round_trips_through_its_detail() {
         for attestation in [
-            Attestation::Signed { commit: "a2b870e".into(), by: "Greg Villa".into() },
-            Attestation::Unsigned { commit: "539b1c7".into(), by: "A Colleague".into() },
+            signed("a2b870e", "Greg Villa"),
+            Attestation::UnknownKey {
+                commit: "539b1c7".into(),
+                key: "0000000000000000".into(),
+                signer: "An Agent".into(),
+            },
+            Attestation::Unsigned { commit: "d6eb4a8".into(), by: "A Colleague".into() },
             Attestation::unattested("these lines are not committed"),
         ] {
             let rendered = attestation.to_string();
@@ -289,25 +359,57 @@ mod tests {
 
     #[test]
     fn a_detail_this_module_did_not_write_parses_to_nothing() {
-        for detail in ["", "a colleague vouched for it", "attest:signed", "attest:none because:"] {
-            assert_eq!(Attestation::parse(detail), None, "from {detail:?}");
+        for detail in [
+            "",
+            "a colleague vouched for it",
+            "attest:signed",
+            "attest:none because:",
+            "attest:signed commit:abc key: signer:Greg",
+        ] {
+            assert_eq!(Attestation::parse(detail), Option::None, "from {detail:?}");
         }
     }
 
+    /// The half of U-31 that git already answered and this module was throwing
+    /// away: a signature it can verify is not the same as a key it trusts.
     #[test]
-    fn one_unsigned_line_governs_the_span_it_sits_in() {
-        let signed = Attestation::Signed { commit: "aaaaaaa".into(), by: "Greg".into() };
+    fn a_signature_from_an_unknown_key_is_not_a_signature_that_counts() {
+        let trusted = signed("aaaaaaa", "Greg Villa");
+        let stranger = Attestation::UnknownKey {
+            commit: "bbbbbbb".into(),
+            key: "0000000000000000".into(),
+            signer: "Greg Villa".into(),
+        };
+
+        assert!(trusted.is_signed());
+        // The same name, a key nobody vouched for. An agent can mint one of
+        // these in a second and put whatever name it likes on it, which is why
+        // the name is not what makes it count.
+        assert!(!stranger.is_signed());
+        assert_eq!(stranger.signer(), Some("Greg Villa"));
+        assert_eq!(Attestation::weakest(&[trusted, stranger.clone()]), stranger);
+    }
+
+    #[test]
+    fn one_weak_line_governs_the_span_it_sits_in() {
+        let trusted = signed("aaaaaaa", "Greg");
         let unsigned = Attestation::Unsigned { commit: "bbbbbbb".into(), by: "Greg".into() };
         let nothing = Attestation::unattested("these lines are not committed");
 
         // However well attested the lines around it: those words did get there
         // unsigned, and the span is only as trustworthy as its weakest line.
         assert_eq!(
-            Attestation::weakest(&[signed.clone(), unsigned.clone(), signed.clone()]),
+            Attestation::weakest(&[trusted.clone(), unsigned.clone(), trusted.clone()]),
             unsigned
         );
-        assert_eq!(Attestation::weakest(&[signed.clone(), unsigned, nothing.clone()]), nothing);
-        assert_eq!(Attestation::weakest(&[signed.clone(), signed.clone()]), signed);
+        assert_eq!(Attestation::weakest(&[trusted.clone(), unsigned, nothing.clone()]), nothing);
+        assert_eq!(Attestation::weakest(&[trusted.clone(), trusted.clone()]), trusted);
+    }
+
+    #[test]
+    fn the_signers_address_stays_out_of_the_record() {
+        assert_eq!(strip_address("Greg Villa <someone@example.com>"), "Greg Villa");
+        assert_eq!(strip_address("Greg Villa"), "Greg Villa");
     }
 
     #[test]

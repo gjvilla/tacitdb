@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use store::Store;
 use tacit_core::Ledger;
+use std::collections::BTreeSet;
 use tacit_keeper::{Attest, Disposition};
 
 #[tokio::main]
@@ -20,7 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut corpus = None;
     let mut store = None;
-    let mut attest = Attest::Observe;
+    let mut require_signature = false;
+    let mut signers: BTreeSet<String> = BTreeSet::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -33,8 +35,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 index += 2;
             }
             "--require-signature" => {
-                attest = Attest::RequireSignature;
+                require_signature = true;
                 index += 1;
+            }
+            // Named here and never read out of the repository: a list of who
+            // may promote, kept in the file it protects, is one more file an
+            // agent can edit.
+            "--signed-by" => {
+                let Some(name) = args.get(index + 1) else {
+                    eprintln!("tacit-mcp: --signed-by needs a signer's name");
+                    std::process::exit(2);
+                };
+                signers.insert(name.clone());
+                require_signature = true;
+                index += 2;
             }
             other if other.starts_with('-') => {
                 eprintln!("tacit-mcp: unknown option {other}");
@@ -82,6 +96,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         None => Ledger::new(),
+    };
+
+    let attest = match (require_signature, signers.is_empty()) {
+        (false, _) => Attest::Observe,
+        (true, true) => Attest::RequireSignature,
+        (true, false) => Attest::RequireSignatureFrom(signers),
     };
 
     // The documents are upstream and the store is downstream, so every start
@@ -132,10 +152,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // The whole of U-29 in one line each: a verdict transcribed
                 // from prose is only as good as what is known about who wrote
                 // the prose.
-                for (id, attestation) in &report.withheld {
+                for (id, why) in &report.withheld {
                     eprintln!(
-                        "tacit-mcp:   {id} asserts a verdict that no signed commit carries \
-                         ({attestation}) — not transcribed; the claim stays proposed"
+                        "tacit-mcp:   {id} asserts a verdict this run will not carry: {why} \
+                         — not transcribed; the claim stays proposed"
                     );
                 }
                 if !report.unattested.is_empty() {

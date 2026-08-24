@@ -898,9 +898,70 @@ something other than a person can write to.
 
 **What this does not do.** It does not establish that the signer intended the
 promotion — an agent running on an unlocked machine can sign as its owner, and
-no signing scheme survives a compromised endpoint. It does not know which keys
-the project trusts; git's own verdict is taken as given. Both are identity
-questions, which is the keeper's to answer and still unanswered (U-31).
+no signing scheme survives a compromised endpoint.
+
+*Amended 2026-08-24 (D-0026).* As first written this record went on to say that
+it did not know which keys the project trusts, and took git's verdict as given.
+That was true of the code and untrue of git: `%G?` had always separated a key
+this machine's keyring vouches for from one that merely arrived with the commit,
+and this record's implementation collapsed the two. D-0026 stops collapsing them
+and adds the second half — which identities may carry verdicts, named from
+outside the repository. The endpoint limit in the paragraph above still stands
+and always will.
+
+---
+
+## D-0026 · Whose signature counts, and where that answer is allowed to live
+
+```yaml
+id: D-0026
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: keeper round — resolves U-31
+evidence: [docs/REGISTER.md, docs/DECISIONS.md — this file is the corpus in question]
+review_trigger: when a signature must be weighed again after the key that made
+  it is revoked, or when signers need roles rather than a flat list
+```
+
+**Assertion.** A signature counts when git says the key is one this machine
+trusts — not merely one it can verify — and, when the caller names signers, when
+the identity the signature binds is one of them. The names come from the caller
+and never from the repository.
+
+**A trust root inside the thing it protects is not a trust root.** The obvious
+design was a `SIGNERS` file in the corpus. It is also the wrong one: an agent
+that can edit `docs/DECISIONS.md` to promote a claim can edit `docs/SIGNERS.md`
+to authorise itself first. Whoever runs the ingest supplies the list —
+`--signed-by "Name"` — because that is the one place the corpus cannot reach.
+
+**Git had already answered half of it and D-0025 was discarding the answer.**
+`%G?` distinguishes `G`, a good signature from a key the machine's keyring
+vouches for, from `U`, a good signature from a key that arrived with the commit.
+D-0025 treated both as signed, which accepts a key an agent minted a second
+earlier — most of what U-31 was actually asking. They are now separate rungs,
+and only `G` carries a verdict. The keyring is git's own, held outside the
+repository, so the trust root was already in the right place and merely unread.
+
+**Matched against the signature, not against the commit.** An author field is
+free text; the identity a signature binds is not. So `--signed-by` is matched
+against `%GS`, and the record keeps the signer's name and the key alongside the
+commit. The match is exact — a loose one would admit every Gregory who ever
+signed anything — and a refusal names the identity it saw, so a mistyped name
+says what to type.
+
+**What it still cannot do, stated plainly.** It cannot establish that the signer
+*intended* the promotion. An agent on an unlocked machine can sign as its owner,
+and no signing scheme survives a compromised endpoint. The goal here was never
+proof: it is attribution a reader can weigh, and a record that says which rung
+each promotion stands on rather than implying they all stand on the same one.
+
+**And a limit worth naming: the attestation is evaluated once.** It is written
+into the verdict and the verdict is immutable, so a key revoked tomorrow does not
+demote what it signed today. That is correct for a record of what was known at
+the time, and it means the ledger's account of trust is a history rather than a
+current view (U-32).
 
 ---
 

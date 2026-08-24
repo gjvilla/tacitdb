@@ -311,7 +311,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Every promoted claim here reached promoted through a verdict this ingest");
     println!("  transcribed from `state: promoted` in a markdown file. So the honest");
     println!("  question is not whether a person declared it — the engine enforces that —");
-    println!("  but how the keeper knows a person wrote the file (U-29, D-0025).");
+    println!("  but how the keeper knows a person wrote the file (D-0025), and whose");
+    println!("  signature counts when one did (D-0026).");
     println!();
     println!("  promoted claims                        {promoted}");
     println!("  resting on a verdict backed by nothing {}", resting_on_nothing.len());
@@ -327,9 +328,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("    {sample}");
     }
     println!();
-    println!("  Run the host with --require-signature and a promotion no signed commit");
-    println!("  carries is not transcribed at all: the claim stays proposed, waiting for");
-    println!("  a person, which is where an unbacked promotion always belonged.");
+    println!("  Run the host with --require-signature, or --signed-by NAME to say whose");
+    println!("  signature carries a verdict, and a promotion that does not meet it is not");
+    println!("  transcribed at all: the claim stays proposed, waiting for a person, which");
+    println!("  is where an unbacked promotion always belonged.");
     println!();
 
     rule("KEEPER WORK QUEUE");
