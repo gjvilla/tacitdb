@@ -114,8 +114,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 for id in &report.drifted {
                     eprintln!(
-                        "tacit-mcp:   {id} was reworded while still open — the store keeps \
-                         the wording it has (U-28)"
+                        "tacit-mcp:   {id} was reworded after it was settled — left as it \
+                         is, because that is history and history is not rewritten"
                     );
                 }
                 for (id, state) in &report.refused {

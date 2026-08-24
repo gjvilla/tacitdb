@@ -732,6 +732,63 @@ by, because it is the one fact that explains the next refused append.
 
 ---
 
+## D-0023 · A withdrawn question says which kind of withdrawal it was
+
+```yaml
+id: D-0023
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: grammar round — resolves U-28
+evidence: [design/001-data-model.md §3.1, docs/REGISTER.md]
+review_trigger: when a fifth reason is wanted, or when set verdicts (U-16) need
+  to close many questions at once
+```
+
+**Assertion.** A question that leaves the register unresolved carries a reason,
+the way a retired claim always has: superseded, answered elsewhere, no longer
+relevant, or registered in error. A hypothesis gets the same door under the name
+`abandoned`. A reworded question is therefore expressible: the new wording is
+registered carrying a `supersedes` link, and the predecessor is closed as
+superseded.
+
+**Forces.** Without the reason, "we asked it better" and "we stopped asking" are
+the same recorded event, and a reader looking for drift cannot tell a rewording
+from a retreat. Three of the four reasons carry a distinct meaning to that
+reader; the fourth carries an alarm. *Answered elsewhere* says the answer exists
+and this ledger does not hold it, which is precisely the knowledge a keeper is
+built to capture — the corpus was already recording it, indistinguishably, as
+plain withdrawal.
+
+**Two records, not one, and the asymmetry is structural.** A claim's replacement
+is promoted and its predecessor retired in a single verdict, because promotion
+*is* a verdict and the two transitions fold together. A gap is registered on
+append; there is no verdict to fold into. So its supersession is the successor
+carrying the link plus one verdict closing the predecessor. Reading that
+asymmetry as a defect would mean inventing a promotion step for questions, which
+would say that a registered question needs ratifying — and it does not.
+
+**Abandoned is not falsified.** Stopping a prediction and finding it false are
+different findings, and a count of falsified hypotheses that quietly includes the
+abandoned ones is a wrong count. Separate state, separate verdict.
+
+**Supersession is same-kind, and enforced.** A claim does not replace a question
+and a question does not replace a claim. The link is where supersession lives —
+the reason on the verdict names the *shape* of the change, and the successor's
+own envelope names the record — so it has to be worth trusting.
+
+**One reason may be read and never written.** Logs written before this decision
+have no reason at all, and they load as `unstated` rather than being assigned a
+meaning after the fact. The engine refuses to write it, which is what keeps it
+readable as "this predates reasons" instead of becoming a way to decline to give
+one. That check sits on the append path and not in the grammar, for the same
+reason D-0022 moved the future-time check there: it is illegal to *claim*, not
+illegal to *hold*. Twice now that distinction has decided where a check belongs,
+which is worth remembering as a rule rather than rediscovering a third time.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

@@ -132,14 +132,35 @@ unable to lie about its shape. Authentication and authorization of *who* counts
 
 ### 3.1 States
 
-- claim: `proposed → promoted → retired`, with `proposed → rejected`
-- gap: `registered → answered | withdrawn` (answered links the promoted claim
-  that answers it)
-- hypothesis: `registered → scored { outcome }`
+- claim: `proposed → promoted → retired { reason }`, with `proposed → rejected`
+- gap: `registered → answered | withdrawn { reason }` (answered links the
+  promoted claim that answers it)
+- hypothesis: `registered → scored { outcome } | abandoned { reason }`
 - verdict: immutable; a later verdict supersedes an earlier one, nothing retracts
 
 A single verdict may promote a superseding claim *and* retire the record it
 supersedes — one decision, one record, both transitions.
+
+*Amended 2026-08-24 (D-0023).* A question that leaves the register unresolved
+carries a reason, the way a retired claim always has: superseded, answered
+elsewhere, no longer relevant, or registered in error. Without it, "we asked it
+better" and "we stopped asking" are the same recorded event, and a reader
+looking for drift cannot tell a rewording from a retreat. A hypothesis gets the
+same door — `abandoned` — because stopping a prediction and finding it false are
+different findings, and a count of falsified hypotheses that includes the
+abandoned ones is a wrong count.
+
+Note the asymmetry with claims, which is structural rather than an oversight: a
+claim's replacement is promoted and its predecessor retired in *one* verdict,
+because promotion is a verdict and the two transitions fold together. A gap or a
+hypothesis is registered on append, with no verdict to fold into — so its
+supersession is two records, the successor carrying the link and one verdict
+closing the predecessor.
+
+**Supersession is same-kind.** `supersedes` may only point at a record of the
+same kind. A claim does not replace a question and a question does not replace a
+claim; the link is where supersession lives, and a verdict that names one is
+read against it.
 
 ### 3.2 The engine invariants
 

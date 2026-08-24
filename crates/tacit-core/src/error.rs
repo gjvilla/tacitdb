@@ -41,6 +41,19 @@ pub enum Error {
     #[error("a promotion cannot retire its own target")]
     PromoteRetireSameRecord,
 
+    #[error(
+        "a withdrawal must state its reason; \"unstated\" is what a log written \
+         before reasons existed reads as, not an account a verdict may give"
+    )]
+    UnstatedWithdrawReason,
+
+    #[error("a {proposed} cannot supersede {prior}, which is a {replaced}")]
+    SupersedesDifferentKind {
+        prior: RecordId,
+        replaced: RecordKind,
+        proposed: RecordKind,
+    },
+
     #[error("measurement target {0} is not a relation claim")]
     MeasurementTargetNotRelation(RecordId),
 

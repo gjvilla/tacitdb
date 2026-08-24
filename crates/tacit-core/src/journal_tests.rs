@@ -356,3 +356,68 @@ fn a_log_written_by_a_healthy_clock_reports_no_skew() {
     assert!(opened.recovery.leads_clock.is_none());
     assert_eq!(opened.ledger.clock_holds(), 0);
 }
+
+/// The migration U-28 forced: `Withdraw` gained a reason, and logs written
+/// before it exists have none. They load as `Unstated` — the one reason a live
+/// verdict may not give — because assigning them a real reason after the fact
+/// would invent an account nobody gave.
+#[test]
+fn a_withdrawal_written_before_reasons_existed_loads_as_unstated() {
+    use crate::content::{GapContent, WithdrawReason};
+
+    let scratch = Scratch::new("reasonless-withdraw");
+    let gap = {
+        let mut ledger = Ledger::open(scratch.path()).unwrap().ledger;
+        ledger
+            .append(Draft::new(
+                Author::human("Greg"),
+                SourceRef::channel("register"),
+                Content::Gap(GapContent { question: "whether to shard".into(), territory: vec![] }),
+            ))
+            .unwrap()
+    };
+
+    // The line the old code wrote: a Withdraw with no `reason` field at all.
+    let text = scratch.text();
+    let old_shape = serde_json::json!({
+        "event": "record",
+        "id": RecordId::mint().to_string().replace("rec_", ""),
+        "recorded_at": Timestamp::now(),
+        "envelope_version": 1,
+        "author": {"name": "Greg", "kind": "Human", "detail": null},
+        "source": {"channel": "register", "reference": null},
+        "valid_from": Timestamp::now(),
+        "content": {"Verdict": {"action": {"Withdraw": {"gap": gap.to_string().replace("rec_", "")}}, "rationale": null}}
+    });
+    scratch.write(&format!("{text}{old_shape}\n"));
+
+    let ledger = Ledger::open(scratch.path()).expect("an old log still loads").ledger;
+    assert_eq!(ledger.state_of(gap), Some(RecordState::Gap(crate::state::GapState::Withdrawn)));
+
+    let recorded = match ledger.history(gap)[0].content() {
+        Content::Verdict(v) => v.action.clone(),
+        other => panic!("expected a verdict, got {other:?}"),
+    };
+    assert!(matches!(
+        recorded,
+        crate::content::VerdictAction::Withdraw { reason: WithdrawReason::Unstated, .. }
+    ));
+
+    // And the same verdict cannot be written today, which is what keeps
+    // `Unstated` readable as "this predates reasons".
+    let mut live = ledger;
+    let err = live
+        .append(Draft::new(
+            Author::human("Greg"),
+            SourceRef::channel("register"),
+            Content::Verdict(crate::content::VerdictContent {
+                action: crate::content::VerdictAction::Withdraw {
+                    gap,
+                    reason: WithdrawReason::Unstated,
+                },
+                rationale: None,
+            }),
+        ))
+        .unwrap_err();
+    assert!(matches!(err, crate::error::Error::UnstatedWithdrawReason), "got {err}");
+}

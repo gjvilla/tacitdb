@@ -1115,7 +1115,10 @@ mod tests {
                 Author::human("Greg"),
                 SourceRef::channel("huddle"),
                 Content::Verdict(VerdictContent {
-                    action: VerdictAction::Withdraw { gap },
+                    action: VerdictAction::Withdraw {
+                        gap,
+                        reason: crate::content::WithdrawReason::NoLongerRelevant,
+                    },
                     rationale: None,
                 }),
             ))

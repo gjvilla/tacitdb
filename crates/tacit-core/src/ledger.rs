@@ -1,4 +1,4 @@
-use crate::content::{ClaimContent, Content, RecordKind, VerdictAction};
+use crate::content::{ClaimContent, Content, RecordKind, VerdictAction, WithdrawReason};
 use crate::entity::Entity;
 use crate::envelope::{Author, AuthorKind, Envelope};
 use crate::error::Error;
@@ -204,6 +204,22 @@ impl Ledger {
             return Err(Error::FutureRecordTime { proposed: recorded_at, now });
         }
 
+        // The same distinction, met a second time: `Unstated` is what a log
+        // written before reasons existed *reads as*, not an account a verdict
+        // may give. Illegal to claim, not illegal to hold — so it belongs on
+        // the write path, and replay leaves it alone. Nothing is given up: the
+        // reason confers no authority, and the author and transition checks
+        // that do are still enforced on load.
+        if let Content::Verdict(verdict) = &draft.content
+            && matches!(
+                verdict.action,
+                VerdictAction::Withdraw { reason: WithdrawReason::Unstated, .. }
+                    | VerdictAction::Abandon { reason: WithdrawReason::Unstated, .. }
+            )
+        {
+            return Err(Error::UnstatedWithdrawReason);
+        }
+
         self.validate(&draft, recorded_at)?;
         let id = RecordId::mint();
         self.write(id, draft, recorded_at, ENVELOPE_VERSION)
@@ -237,10 +253,20 @@ impl Ledger {
             }
         }
 
-        if let Some(prior) = draft.supersedes
-            && !self.records.contains_key(&prior)
-        {
-            return Err(Error::UnknownRecord(prior));
+        if let Some(prior) = draft.supersedes {
+            let replaced = self.records.get(&prior).ok_or(Error::UnknownRecord(prior))?;
+            // Supersession is "this record replaces that one", which only means
+            // anything between records of one kind: a gap does not replace a
+            // claim, and a claim does not replace a question. The link is where
+            // supersession lives — a verdict may *say* superseded, and this is
+            // what makes the successor findable.
+            if replaced.kind() != draft.content.kind() {
+                return Err(Error::SupersedesDifferentKind {
+                    prior,
+                    replaced: replaced.kind(),
+                    proposed: draft.content.kind(),
+                });
+            }
         }
 
         match &draft.content {
@@ -490,12 +516,20 @@ impl Ledger {
                 }
                 Ok(())
             }
-            VerdictAction::Withdraw { gap } => {
+            VerdictAction::Withdraw { gap, .. } => {
                 expect_kind(*gap, RecordKind::Gap)?;
                 expect_state(
                     *gap,
                     RecordState::Gap(GapState::Registered),
                     self.state_of(*gap).expect("gap exists"),
+                )
+            }
+            VerdictAction::Abandon { hypothesis, .. } => {
+                expect_kind(*hypothesis, RecordKind::Hypothesis)?;
+                expect_state(
+                    *hypothesis,
+                    RecordState::Hypothesis(HypothesisState::Registered),
+                    self.state_of(*hypothesis).expect("hypothesis exists"),
                 )
             }
             VerdictAction::Score { hypothesis, .. } => {
@@ -1089,6 +1123,113 @@ mod tests {
             .append_at(attribute_claim(subject, Author::human("Greg")), future)
             .unwrap_err();
         assert!(matches!(err, Error::FutureRecordTime { .. }));
+    }
+
+    // ── U-28: withdrawing a question, and saying which kind ─────────────────
+
+    fn gap_draft(question: &str) -> Draft {
+        Draft::new(
+            Author::human("Greg"),
+            SourceRef::channel("register"),
+            Content::Gap(GapContent { question: question.into(), territory: vec![] }),
+        )
+    }
+
+    fn hypothesis_draft(statement: &str) -> Draft {
+        Draft::new(
+            Author::human("Greg"),
+            SourceRef::channel("interview"),
+            Content::Hypothesis(HypothesisContent {
+                statement: statement.into(),
+                falsifier: None,
+                score_by: ts(10_000),
+            }),
+        )
+    }
+
+    #[test]
+    fn a_reworded_question_and_an_abandoned_one_are_different_records() {
+        let (mut ledger, _, _) = setup();
+        let old = ledger.append(gap_draft("whether a query language is needed")).unwrap();
+
+        let mut replacement = gap_draft("whether a query language is needed, and in what shape");
+        replacement.supersedes = Some(old);
+        let new = ledger.append(replacement).unwrap();
+        ledger
+            .append(verdict(
+                VerdictAction::Withdraw { gap: old, reason: WithdrawReason::Superseded },
+                Author::human("Greg"),
+            ))
+            .unwrap();
+
+        assert_eq!(ledger.state_of(old), Some(RecordState::Gap(GapState::Withdrawn)));
+        assert_eq!(ledger.state_of(new), Some(RecordState::Gap(GapState::Registered)));
+        assert_eq!(ledger.record(new).unwrap().envelope().supersedes(), Some(old));
+        // One live question, and the successor findable from the record that
+        // replaced it rather than from the verdict that closed it.
+        let live: Vec<_> = ledger.registered_gaps().iter().map(|r| r.id()).collect();
+        assert_eq!(live, vec![new]);
+    }
+
+    #[test]
+    fn abandoning_a_hypothesis_is_not_scoring_it() {
+        let (mut ledger, _, _) = setup();
+        let h = ledger.append(hypothesis_draft("within six months it self-hosts")).unwrap();
+        ledger
+            .append(verdict(
+                VerdictAction::Abandon { hypothesis: h, reason: WithdrawReason::NoLongerRelevant },
+                Author::human("Greg"),
+            ))
+            .unwrap();
+
+        // Stopping a prediction and finding it false are different events, and
+        // a reader counting falsified hypotheses must not see this one.
+        assert_eq!(ledger.state_of(h), Some(RecordState::Hypothesis(HypothesisState::Abandoned)));
+        assert_ne!(
+            ledger.state_of(h),
+            Some(RecordState::Hypothesis(HypothesisState::Scored(ScoreOutcome::Falsified)))
+        );
+        // And it is spent: a hypothesis leaves the registered set once.
+        let err = ledger
+            .append(verdict(
+                VerdictAction::Score { hypothesis: h, outcome: ScoreOutcome::Met },
+                Author::human("Greg"),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, Error::IllegalTransition { .. }), "got {err}");
+    }
+
+    #[test]
+    fn a_withdrawal_must_say_which_kind_it_is() {
+        let (mut ledger, _, _) = setup();
+        let gap = ledger.append(gap_draft("whether to shard")).unwrap();
+        let err = ledger
+            .append(verdict(
+                VerdictAction::Withdraw { gap, reason: WithdrawReason::Unstated },
+                Author::human("Greg"),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, Error::UnstatedWithdrawReason), "got {err}");
+        assert_eq!(ledger.state_of(gap), Some(RecordState::Gap(GapState::Registered)));
+    }
+
+    #[test]
+    fn supersession_only_means_something_between_records_of_one_kind() {
+        let (mut ledger, _, subject) = setup();
+        let claim = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+
+        let mut gap = gap_draft("whether the torque spec is right");
+        gap.supersedes = Some(claim);
+        let err = ledger.append(gap).unwrap_err();
+        assert!(matches!(err, Error::SupersedesDifferentKind { .. }), "got {err}");
+
+        // The link is where supersession lives, so it has to be trustworthy:
+        // a verdict may say "superseded", and this is what makes the successor
+        // findable rather than merely asserted.
+        let old = ledger.append(gap_draft("whether to shard")).unwrap();
+        let mut replacement = gap_draft("whether to shard, and by what key");
+        replacement.supersedes = Some(old);
+        ledger.append(replacement).expect("a gap may replace a gap");
     }
 
     // ── U-22: a clock that steps backwards ──────────────────────────────────

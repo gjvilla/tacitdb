@@ -30,13 +30,17 @@
 //! - A record that has vanished from the document is **reported, not retired**.
 //!   Deleting a paragraph is not the same act as retiring a decision, and the
 //!   document no longer contains the words that would say so.
-//! - A reworded *question* — a register row still open, or a hypothesis not yet
-//!   scored — is **reported as drift**, and the ledger keeps the wording it
-//!   has. The grammar can supersede a claim and has no such path for a gap or a
-//!   hypothesis (U-28). Appending anyway would leave two live registered
-//!   questions where the document asks one, and inventing a verdict to retire
-//!   the first would be a design decision smuggled in as an implementation
-//!   detail.
+//! - A *question* reworded after it was settled — an answered register row, a
+//!   scored hypothesis — is **reported as drift** and left exactly as it is.
+//!   That is not a limitation: the register says history is never rewritten,
+//!   and polishing the phrasing of a question the project already closed is
+//!   editing history.
+//!
+//! A question reworded while it is *still open* does supersede, since D-0023:
+//! the new wording is registered carrying a `supersedes` link, and the old is
+//! withdrawn (a gap) or abandoned (a hypothesis) with the reason `Superseded`,
+//! so "we asked it better" and "we stopped asking" are no longer the same
+//! recorded event.
 //!
 //! One loose end the sync accepts rather than hides: when an edit removes a
 //! cross-reference, the edge claiming it was there is not re-appended and so is
@@ -51,9 +55,9 @@ use jiff::tz::TimeZone;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tacit_core::{
-    Author, ClaimContent, ClaimState, Content, Draft, EntityId, Evidence, GapContent,
-    HypothesisContent, Ledger, RecordId, RecordState, ReviewTrigger, SourceRef, VerdictAction,
-    VerdictContent,
+    Author, ClaimContent, ClaimState, Content, Draft, EntityId, Evidence, GapContent, GapState,
+    HypothesisContent, HypothesisState, Ledger, RecordId, RecordState, ReviewTrigger, SourceRef,
+    VerdictAction, VerdictContent, WithdrawReason,
 };
 
 /// The two documents this ingester reads, named once so provenance and lookup
@@ -338,18 +342,48 @@ pub fn ingest_text(
         report.dispositions.push((record.id.clone(), disposition));
         seen.insert(origin.identity());
 
-        // A hypothesis is a question the project has not yet scored, and the
-        // grammar can no more supersede one than it can supersede a gap. Same
-        // rule, same reason (U-28).
-        let unsupersedable = disposition == Disposition::Changed && record.id.starts_with('H');
-        if unsupersedable {
+        // A reworded hypothesis supersedes its predecessor and abandons it —
+        // but only while that predecessor is still an open prediction. One
+        // already scored is history, and history is not rewritten.
+        let abandoning = (disposition == Disposition::Changed && is_hypothesis(record))
+            .then(|| prior.record(&origin))
+            .flatten()
+            .filter(|old| {
+                ledger.state_of(*old) == Some(RecordState::Hypothesis(HypothesisState::Registered))
+            });
+        let settled_history = disposition == Disposition::Changed
+            && is_hypothesis(record)
+            && abandoning.is_none();
+        if settled_history {
             report.drifted.push(record.id.clone());
         }
-        if disposition == Disposition::Unchanged || unsupersedable {
+        if disposition == Disposition::Unchanged || settled_history {
             carry_forward(&prior, &origin, record, &mut seen, &mut report);
             continue;
         }
         ingest_one(ledger, record, &origin, &prior, repo_root, &mut seen, &mut retiring, &mut report)?;
+        if let Some(old) = abandoning {
+            let verdict = ledger.append(Draft::new(
+                Author::human(record.require("author")?),
+                SourceRef {
+                    channel: "corpus-ingest".into(),
+                    reference: Some(format!("{DECISIONS_DOC} {} reworded", record.id)),
+                },
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Abandon {
+                        hypothesis: old,
+                        reason: WithdrawReason::Superseded,
+                    },
+                    rationale: Some(format!(
+                        "transcribed from {DECISIONS_DOC}: {} is stated differently than \
+                         the wording this record replaces",
+                        record.id
+                    )),
+                }),
+            ))?;
+            report.verdicts.push(verdict);
+            report.written += 1;
+        }
     }
 
     // Phase 2 — every register row lands as a registered gap.
@@ -360,17 +394,49 @@ pub fn ingest_text(
             report.dispositions.push((unknown.id.clone(), disposition));
             seen.insert(origin.identity());
 
-            match disposition {
-                Disposition::Fresh => ingest_gap(ledger, unknown, &origin, author, &mut report)?,
-                // A reworded question and an answered one are different events,
-                // and the grammar can only express the second. Reported rather
-                // than forced (U-28).
-                other => {
-                    let gap = prior.record(&origin).expect("not fresh, so the ledger holds it");
-                    if other == Disposition::Changed {
-                        report.drifted.push(unknown.id.clone());
-                    }
-                    report.gaps.push((unknown.id.clone(), gap));
+            let held = prior.record(&origin);
+            let open =
+                held.filter(|g| ledger.state_of(*g) == Some(RecordState::Gap(GapState::Registered)));
+
+            match (disposition, open) {
+                (Disposition::Fresh, _) => {
+                    ingest_gap(ledger, unknown, &origin, None, author, &mut report)?;
+                }
+                // Reworded while still open: register the new wording carrying
+                // the link back, and withdraw the old as superseded. Two
+                // records because registration is not a verdict — there is no
+                // promotion to fold the retirement into, the way a claim has.
+                (Disposition::Changed, Some(old)) => {
+                    ingest_gap(ledger, unknown, &origin, Some(old), author, &mut report)?;
+                    let verdict = ledger.append(Draft::new(
+                        author.clone(),
+                        SourceRef {
+                            channel: "register".into(),
+                            reference: Some(format!("{REGISTER_DOC} {} reworded", unknown.id)),
+                        },
+                        Content::Verdict(VerdictContent {
+                            action: VerdictAction::Withdraw {
+                                gap: old,
+                                reason: WithdrawReason::Superseded,
+                            },
+                            rationale: Some(format!(
+                                "transcribed from {REGISTER_DOC}: {} is asked differently \
+                                 than the wording this row replaces",
+                                unknown.id
+                            )),
+                        }),
+                    ))?;
+                    report.verdicts.push(verdict);
+                    report.written += 1;
+                }
+                // Reworded after it was settled. Left alone: the register says
+                // history is never rewritten, and this is history.
+                (Disposition::Changed, None) => {
+                    report.drifted.push(unknown.id.clone());
+                    report.gaps.push((unknown.id.clone(), held.expect("not fresh")));
+                }
+                (Disposition::Unchanged, _) => {
+                    report.gaps.push((unknown.id.clone(), held.expect("not fresh")));
                 }
             }
         }
@@ -470,7 +536,14 @@ pub fn ingest_text(
                     ),
                 ),
                 _ => (
-                    VerdictAction::Withdraw { gap },
+                    // The row says it was resolved and names nothing that
+                    // resolved it. That is not "we stopped asking" — it is an
+                    // answer this ledger does not hold, which is exactly the
+                    // kind of thing a keeper should be able to go looking for.
+                    VerdictAction::Withdraw {
+                        gap,
+                        reason: WithdrawReason::AnsweredElsewhere,
+                    },
                     format!(
                         "transcribed from docs/REGISTER.md: {} resolved {} with no \
                          settling record named",
@@ -533,6 +606,7 @@ fn ingest_gap(
     ledger: &mut Ledger,
     unknown: &ParsedUnknown,
     origin: &Origin,
+    supersedes: Option<RecordId>,
     author: &Author,
     report: &mut IngestReport,
 ) -> Result<(), IngestError> {
@@ -562,6 +636,7 @@ fn ingest_gap(
         Content::Gap(GapContent { question, territory }),
     );
     draft.review_trigger = review_trigger;
+    draft.supersedes = supersedes;
     let id = ledger.append(draft)?;
     report.gaps.push((unknown.id.clone(), id));
     report.written += 1;
@@ -661,6 +736,12 @@ fn ingest_one(
 /// new and retire the old in one verdict. Only a *promoted* predecessor is
 /// recorded: retiring is a transition out of the promoted set, and a claim
 /// that never entered it has nothing to leave.
+/// The document's own signal, matched by `build_content`, which cross-checks
+/// it against the record's sections and hard-errors when the two disagree.
+fn is_hypothesis(record: &ParsedRecord) -> bool {
+    record.id.starts_with('H')
+}
+
 fn note_supersession(
     ledger: &Ledger,
     prior: &Prior,
@@ -983,37 +1064,64 @@ mod tests {
         assert!(!after.quiet() || !after.absent.is_empty());
     }
 
-    #[test]
-    fn a_reworded_hypothesis_is_reported_as_drift_like_a_reworded_question() {
-        let root = repo_root();
-        let doc = |statement: &str| {
-            format!(
-                "## H-0001 · Success hypothesis\n\n\
-                 ```yaml\n\
-                 id: H-0001\n\
-                 state: registered\n\
-                 author: Greg Villa\n\
-                 source: founding-interview / round 3\n\
-                 recorded: 2026-08-22\n\
-                 score_by: 2027-02-22\n\
-                 ```\n\n\
-                 **Hypothesis.** {statement}\n\n"
-            )
-        };
-        let mut ledger = Ledger::new();
-        let before = ingest_text(&mut ledger, &doc("Within six months it self-hosts."), None, &root)
-            .expect("first ingest");
-        let original = before.content_claim("H-0001").unwrap();
+    fn hypothesis_doc(statement: &str) -> String {
+        format!(
+            "## H-0001 · Success hypothesis\n\n\
+             ```yaml\n\
+             id: H-0001\n\
+             state: registered\n\
+             author: Greg Villa\n\
+             source: founding-interview / round 3\n\
+             recorded: 2026-08-22\n\
+             score_by: 2027-02-22\n\
+             ```\n\n\
+             **Hypothesis.** {statement}\n\n"
+        )
+    }
 
-        let after = ingest_text(&mut ledger, &doc("Within nine months it self-hosts."), None, &root)
-            .expect("second ingest");
-        assert_eq!(after.drifted, vec!["H-0001".to_string()]);
-        assert_eq!(after.appended(), 0, "two live registered hypotheses is not an improvement");
-        assert_eq!(after.content_claim("H-0001"), Some(original));
+    fn withdraw_reason(record: &tacit_core::Record) -> Option<WithdrawReason> {
+        match record.content() {
+            Content::Verdict(v) => match v.action {
+                VerdictAction::Withdraw { reason, .. } => Some(reason),
+                VerdictAction::Abandon { reason, .. } => Some(reason),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     #[test]
-    fn a_reworded_open_register_row_is_reported_as_drift() {
+    fn a_reworded_hypothesis_supersedes_the_prediction_it_replaces() {
+        let root = repo_root();
+        let mut ledger = Ledger::new();
+        let before =
+            ingest_text(&mut ledger, &hypothesis_doc("Within six months it self-hosts."), None, &root)
+                .expect("first ingest");
+        let old = before.content_claim("H-0001").unwrap();
+
+        let after =
+            ingest_text(&mut ledger, &hypothesis_doc("Within nine months it self-hosts."), None, &root)
+                .expect("second ingest");
+        let new = after.content_claim("H-0001").unwrap();
+
+        assert!(after.drifted.is_empty(), "an open prediction is not history");
+        assert_ne!(new, old);
+        assert_eq!(ledger.record(new).unwrap().envelope().supersedes(), Some(old));
+        assert_eq!(
+            ledger.state_of(new),
+            Some(RecordState::Hypothesis(HypothesisState::Registered))
+        );
+        assert_eq!(
+            ledger.state_of(old),
+            Some(RecordState::Hypothesis(HypothesisState::Abandoned)),
+            "and abandoned is not the same as scored Falsified — the project stopped \
+             making the prediction, it did not find it false"
+        );
+        assert_eq!(withdraw_reason(ledger.history(old)[0]), Some(WithdrawReason::Superseded));
+    }
+
+    #[test]
+    fn a_reworded_open_register_row_supersedes_the_wording_it_replaces() {
         let root = repo_root();
         let decisions = decisions_doc(&[("D-0001", "Four forces.")]);
         let mut ledger = Ledger::new();
@@ -1025,7 +1133,7 @@ mod tests {
             &root,
         )
         .expect("first ingest");
-        let gap = before.gap("U-1").unwrap();
+        let old = before.gap("U-1").unwrap();
 
         let after = ingest_text(
             &mut ledger,
@@ -1034,14 +1142,69 @@ mod tests {
             &root,
         )
         .expect("second ingest");
+        let new = after.gap("U-1").unwrap();
 
+        assert!(after.drifted.is_empty());
+        assert_ne!(new, old);
+        assert_eq!(ledger.record(new).unwrap().envelope().supersedes(), Some(old));
+        assert_eq!(ledger.state_of(new), Some(RecordState::Gap(GapState::Registered)));
+        assert_eq!(ledger.state_of(old), Some(RecordState::Gap(GapState::Withdrawn)));
+        // The point of the whole exercise: one live question where the document
+        // asks one, and a record that says which kind of withdrawal it was.
+        assert_eq!(ledger.registered_gaps().len(), 1);
+        assert_eq!(withdraw_reason(ledger.history(old)[0]), Some(WithdrawReason::Superseded));
+    }
+
+    #[test]
+    fn a_question_reworded_after_it_was_settled_is_left_as_history() {
+        let root = repo_root();
+        let decisions = decisions_doc(&[("D-0001", "Four forces.")]);
+        let resolved = |note: &str| {
+            format!(
+                "## Room 2 · Known unknowns\n\n\
+                 | id | Question | Trigger | Notes |\n\
+                 |----|----------|---------|-------|\n\
+                 | U-1 | ~~Whether a query language is needed~~ **Resolved 2026-08-23** \
+                 → D-0001: the forces settle it | — | {note} |\n\n\
+                 *Recorded 2026-08-23. Owner: Greg Villa.*\n"
+            )
+        };
+
+        let mut ledger = Ledger::new();
+        let before = ingest_text(&mut ledger, &decisions, Some(&resolved("as first written")), &root)
+            .expect("first ingest");
+        let gap = before.gap("U-1").unwrap();
+        assert_eq!(ledger.state_of(gap), Some(RecordState::Gap(GapState::Answered)));
+
+        let after = ingest_text(&mut ledger, &decisions, Some(&resolved("tidied later")), &root)
+            .expect("second ingest");
         assert_eq!(after.drifted, vec!["U-1".to_string()]);
         assert_eq!(after.appended(), 0);
-        // The ledger keeps the wording it has. Withdrawing the old question
-        // would say the project stopped asking it, which is not what happened
-        // — and the grammar has no third thing to say (U-28).
-        assert_eq!(after.gap("U-1"), Some(gap));
-        assert!(!after.quiet(), "drift is not silence");
+        assert_eq!(after.gap("U-1"), Some(gap), "history is never rewritten");
+    }
+
+    #[test]
+    fn a_resolved_row_naming_no_record_is_withdrawn_as_answered_elsewhere() {
+        let root = repo_root();
+        let register = "## Room 2 · Known unknowns\n\n\
+             | id | Question | Trigger | Notes |\n\
+             |----|----------|---------|-------|\n\
+             | U-1 | ~~Whether a query language is needed~~ **Resolved 2026-08-23** \
+             in conversation | — | nothing here states the answer |\n\n\
+             *Recorded 2026-08-23. Owner: Greg Villa.*\n";
+        let mut ledger = Ledger::new();
+        let report = ingest_text(&mut ledger, &decisions_doc(&[("D-0001", "Four forces.")]), Some(register), &root)
+            .expect("ingest");
+        let gap = report.gap("U-1").unwrap();
+
+        assert_eq!(ledger.state_of(gap), Some(RecordState::Gap(GapState::Withdrawn)));
+        // Not "we stopped asking": the row says it was resolved and names
+        // nothing that resolved it, which is an answer this ledger does not
+        // hold — the reason exists so a keeper can go looking for it.
+        assert_eq!(
+            withdraw_reason(ledger.history(gap)[0]),
+            Some(WithdrawReason::AnsweredElsewhere)
+        );
     }
 
     #[test]

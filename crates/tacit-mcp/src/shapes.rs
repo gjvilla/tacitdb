@@ -121,7 +121,8 @@ fn describe_action(action: &tacit_core::VerdictAction) -> String {
         A::Retire { target, reason } => format!("retire {target} ({reason:?})"),
         A::Reject { target } => format!("reject {target}"),
         A::Answer { gap, with_claim } => format!("answer {gap} with {with_claim}"),
-        A::Withdraw { gap } => format!("withdraw {gap}"),
+        A::Withdraw { gap, reason } => format!("withdraw {gap} ({reason})"),
+        A::Abandon { hypothesis, reason } => format!("abandon {hypothesis} ({reason})"),
         A::Score { hypothesis, outcome } => format!("score {hypothesis} {outcome:?}"),
     }
 }

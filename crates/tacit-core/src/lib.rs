@@ -30,7 +30,7 @@ mod value;
 
 pub use content::{
     ClaimContent, Content, GapContent, HypothesisContent, RecordKind, RetireReason, ScoreOutcome,
-    VerdictAction, VerdictContent,
+    VerdictAction, VerdictContent, WithdrawReason,
 };
 pub use embedding::{Embedded, Embedder, HashingEmbedder, VectorIndex, similarity};
 pub use entity::Entity;

@@ -133,6 +133,54 @@ pub enum RetireReason {
     PromotedInError,
 }
 
+/// Why a registered question left the register without being resolved.
+///
+/// The mirror of [`RetireReason`], and for the same reason: without it, "we
+/// stopped asking" and "we asked it better" are the same recorded event, and a
+/// keeper reading the ledger for drift cannot tell a tidy-up from a retreat.
+/// Each variant means something different to that reader — a superseded
+/// question is continuity, an answer held outside the ledger is a provenance
+/// gap worth chasing, an irrelevant one marks the territory moving, and one
+/// registered in error marks a mistake in the register rather than in the
+/// world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WithdrawReason {
+    /// Asked again in a later record. The successor carries the link: this
+    /// reason names the *shape* of the change, and `Envelope::supersedes` on
+    /// the record that replaced it names the record.
+    Superseded,
+    /// The answer is known, and no record in this ledger states it. The
+    /// loudest of the four: an answered question with no recorded answer is
+    /// exactly the knowledge a keeper exists to capture.
+    AnsweredElsewhere,
+    /// Nothing answered it and nothing will — the question stopped mattering.
+    NoLongerRelevant,
+    /// It was never an open question: a duplicate, or already settled when it
+    /// was written down.
+    RegisteredInError,
+    /// Recorded before this field existed. Read-only: [`Ledger::append`]
+    /// refuses a verdict that states it, so it can arrive from an old log and
+    /// can never be written. The alternative — defaulting old records to a
+    /// real reason — would invent an account nobody gave.
+    ///
+    /// [`Ledger::append`]: crate::Ledger::append
+    #[default]
+    Unstated,
+}
+
+impl fmt::Display for WithdrawReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            WithdrawReason::Superseded => "superseded",
+            WithdrawReason::AnsweredElsewhere => "answered elsewhere",
+            WithdrawReason::NoLongerRelevant => "no longer relevant",
+            WithdrawReason::RegisteredInError => "registered in error",
+            WithdrawReason::Unstated => "unstated",
+        };
+        f.write_str(s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VerdictAction {
     /// One verdict may promote a superseding claim and retire the record it
@@ -152,8 +200,23 @@ pub enum VerdictAction {
         gap: RecordId,
         with_claim: RecordId,
     },
+    /// A registered question leaves the register unanswered.
     Withdraw {
         gap: RecordId,
+        /// Defaulted on read, never on write: logs written before reasons
+        /// existed load as [`WithdrawReason::Unstated`] rather than being
+        /// assigned a meaning after the fact.
+        #[serde(default)]
+        reason: WithdrawReason,
+    },
+    /// The hypothesis equivalent of [`VerdictAction::Withdraw`]: a dated
+    /// prediction the project stops making before its score date. Separate
+    /// from `Withdraw` because [`VerdictAction::effects`] is a pure function
+    /// of the action — it must know the resulting state without consulting the
+    /// ledger, and gaps and hypotheses do not share one.
+    Abandon {
+        hypothesis: RecordId,
+        reason: WithdrawReason,
     },
     Score {
         hypothesis: RecordId,
@@ -184,8 +247,11 @@ impl VerdictAction {
             VerdictAction::Answer { gap, .. } => {
                 vec![(*gap, RecordState::Gap(GapState::Answered))]
             }
-            VerdictAction::Withdraw { gap } => {
+            VerdictAction::Withdraw { gap, .. } => {
                 vec![(*gap, RecordState::Gap(GapState::Withdrawn))]
+            }
+            VerdictAction::Abandon { hypothesis, .. } => {
+                vec![(*hypothesis, RecordState::Hypothesis(HypothesisState::Abandoned))]
             }
             VerdictAction::Score { hypothesis, outcome } => {
                 vec![(
@@ -209,6 +275,7 @@ impl VerdictAction {
             VerdictAction::Reject { .. } => "reject",
             VerdictAction::Answer { .. } => "answer",
             VerdictAction::Withdraw { .. } => "withdraw",
+            VerdictAction::Abandon { .. } => "abandon",
             VerdictAction::Score { .. } => "score",
         }
     }

@@ -21,6 +21,10 @@ pub enum GapState {
 pub enum HypothesisState {
     Registered,
     Scored(ScoreOutcome),
+    /// Stopped being predicted before its score date — the hypothesis
+    /// equivalent of a withdrawn question, and not the same thing as one that
+    /// was scored `Falsified`.
+    Abandoned,
 }
 
 /// Derived, never stored: state is a fold over the verdicts touching a record
