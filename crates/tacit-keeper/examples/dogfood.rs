@@ -322,9 +322,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  provenance, and honestly abstain on registered unknowns\":");
     println!("    · the capability exists and is tested end to end over stdio");
     println!("      (cargo run -p tacit-mcp -- .), with no promote tool on the surface");
-    println!("    · but nothing has yet graded whether its answers are *good* — that is");
-    println!("      (c), and (c) has not started");
-    println!("  Scored honestly: (a) partial, (b) capability met but ungraded, (c) not started.");
+    println!("    · how good those answers are is what (c) measures, below");
+    println!();
+    println!("  H-0001(c) — \"a small golden suite grades it, rewarding abstention at the");
+    println!("  record's boundary\": docs/GOLDEN.md, run with");
+    println!("    cargo run -p tacit-keeper --example golden");
+    println!("  It scores abstention as a pass and names the room each failure came from.");
+    println!("  Today: 10/14, four of those passes earned by declining to answer, and");
+    println!("  four known shortfalls tracked against U-23 rather than hidden.");
+    println!();
+    println!("  Scored honestly: (a) partial, (b) capability met, (c) instrument exists");
+    println!("  and reports honestly — retrieval quality is the open work, not the grading.");
 
     println!();
     Ok(())

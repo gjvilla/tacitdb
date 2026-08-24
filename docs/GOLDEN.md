@@ -1,0 +1,70 @@
+# Tacit — The Golden Suite
+
+Representative questions with the answers a qualified person agrees are
+correct, run against the engine on demand. This is the known-known room turned
+into an instrument.
+
+Two properties make it worth having.
+
+**Abstention is a pass.** A question the record does not settle should come
+back as an abstention, and where a registered unknown covers the territory it
+should be cited. A system that answers everything confidently scores worse
+here than one that knows its own boundary — which is the opposite of how
+accuracy alone would score them.
+
+**A single number is not the result.** Every failure is classified by which
+room it came from, because "retrieval missed something the record holds" and
+"retrieval answered something the record does not hold" have different owners
+and different fixes.
+
+Golden data decays like any other standard work. Each question below carries an
+owner and a review trigger; the runner reports any that lack one, and any
+marked as a known shortfall against a registered unknown.
+
+## Expectations
+
+| form | meaning |
+|---|---|
+| `answer D-0015` | the record settles this, and D-0015 is the record that does |
+| `abstain U-5` | the record does not settle this, and U-5 is the registered open question covering it |
+| `abstain` | the record does not settle this, and no registered question covers it either |
+| `pending U-23` | appended to any expectation: known to fall short today, tracked against that unknown rather than counted as a pass or a build failure |
+
+## Known shortfalls, and the rule for adding one
+
+Four questions are marked `pending U-23` today. `pending` is not a way to make
+the suite green: it requires a *registered* unknown that explains the failure,
+the runner counts and prints the shortfalls separately from the passes, and it
+announces any question that starts passing so the register entry can be
+reconsidered. A shortfall with no registered cause is a regression.
+
+All four are the same cause — lexical ranking with no semantic candidates:
+
+- **G-07, G-08** surface the correct record at rank one and then decline to
+  call it a match. Recall is fine; confidence calibration is not.
+- **G-09** answers confidently about "storage" from records that merely use the
+  word, instead of abstaining to the open question that actually covers it.
+- **G-10** asks about "licence" where the register writes "license". A lexical
+  index cannot see that those are one word, which is close to the shortest
+  possible demonstration of why U-23 is registered. The question keeps the
+  spelling a person might reasonably type; tuning it to match the corpus would
+  be tuning the instrument to the result.
+
+## Questions
+
+| id | Question | Expect | Owner | Review trigger |
+|----|----------|--------|-------|----------------|
+| G-01 | why is the runtime embedded rather than a server | answer D-0015 | Greg Villa | when the runtime shape is revisited |
+| G-02 | what is the atomic unit of memory | answer D-0004 | Greg Villa | when the envelope schema changes |
+| G-03 | where does the write-path ratchet live, the engine or the keeper | answer D-0012 | Greg Villa | when invariants 1-8 change |
+| G-04 | what separates the governed ledger from the instrument panel | answer D-0013 | Greg Villa | when the two-ledger boundary is redrawn |
+| G-05 | what workload is v1 designed against | answer D-0003 | Greg Villa | when the v1 workload changes |
+| G-06 | is this a personal project or owned by an employer | answer D-0010 | Greg Villa | when U-7 resolves |
+| G-07 | why was the working name retired | answer D-0011 (pending U-23) | Greg Villa | when U-6 resolves |
+| G-08 | what did the prior art survey conclude about building versus adopting | answer D-0008 (pending U-23) | Greg Villa | when a surveyed engine ships the wedge |
+| G-09 | which storage engine does the project use | abstain U-5 (pending U-23) | Greg Villa | when U-5 resolves |
+| G-10 | what licence will the engine ship under | abstain U-17 (pending U-23) | Greg Villa | when U-17 resolves |
+| G-11 | how does sharding across geographic regions work | abstain | Greg Villa | never — this is outside the record by design |
+| G-12 | what is the maximum supported cluster size | abstain | Greg Villa | never — this is outside the record by design |
+| G-13 | how many concurrent writers does the store support | abstain | Greg Villa | when U-5 resolves |
+| G-14 | what colour is the logo | abstain | Greg Villa | never — this is outside the record by design |

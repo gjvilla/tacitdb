@@ -33,6 +33,13 @@ What the project has decided and recorded, with owners and review triggers:
   and interrogates them: provenance with evidence chains, record-time travel,
   the projected graph, and weighted paths over the instrument panel. It prints
   its own honest position against H-0001(a).
+- **[GOLDEN.md](GOLDEN.md)** — the golden suite: representative questions with
+  agreed answers, graded by `cargo run -p tacit-keeper --example golden`. It
+  scores abstention as a pass and classifies every failure by which room it
+  came from, so "retrieval missed what the record holds" and "retrieval
+  answered what it does not" never collapse into one accuracy number. Known
+  shortfalls must name a registered unknown; a failure with no registered
+  cause turns the suite red and fails the build.
 - **Agents can reach the record** (2026-08-23). `cargo run -p tacit-mcp -- .`
   serves this repository's corpus over MCP. The ratchet is visible in the tool
   surface as an absence: there is no promote tool, so no sequence of calls an
@@ -77,7 +84,7 @@ the decision — because an unregistered gap is how systems bluff.
 | U-19 | Ingest idempotency: re-running into a non-fresh ledger duplicates the corpus | Before any durable store exists (interacts with U-5, U-12) | Today's honest answer is "ingest into a fresh ledger", printed loudly rather than silently handled. Content-addressing (U-12) is the likely real answer. |
 | U-20 | Set verdicts vs the transcription cost: the corpus needed two verdicts per record for what a person performed as one editorial act | With U-16 | Concrete evidence for U-16 produced by the first real ingest, not speculation. |
 | U-21 | Relation-scope contradictions never surface (invariant 7 covers attributes only) | With U-15 | Raised by adversarial review 2026-08-23 and confirmed as real-but-deliberate: the engine cannot know a predicate's cardinality. Kept visible so it is a decision, not an oversight. |
-| U-23 | Retrieval quality is lexical only: BM25 separates covered from uncovered but cannot see that "storage engine" and "storage layer" are one question. The query-side stopword list is an English crutch that document frequency cannot replace on a small technical corpus — there, function words are *rare*, so IDF rewards them | Before the golden suite (H-0001c), and before any claim that retrieval is good | The fusion stage exists so vector candidates join the same plan (R-2). Shape, filters, outcome tags and abstention are settled and tested; only the candidate source is thin. |
+| U-23 | Retrieval quality is lexical only: BM25 separates covered from uncovered but cannot see that "storage engine" and "storage layer" are one question. The query-side stopword list is an English crutch that document frequency cannot replace on a small technical corpus — there, function words are *rare*, so IDF rewards them | Before the golden suite (H-0001c), and before any claim that retrieval is good | The fusion stage exists so vector candidates join the same plan (R-2). Shape, filters, outcome tags and abstention are settled and tested; only the candidate source is thin. **Measured 2026-08-23:** the golden suite scores 10/14 with 4 shortfalls, all this cause — two under-confident (right record at rank 1, declined to call it a match), one bluff, one spelling variance ("licence" vs "license"). That last is close to the shortest possible demonstration of the limit. |
 | U-22 | A backwards system-clock step makes every `append` fail with no recovery path | Before durable storage (U-5) | The monotonicity guard that makes `state_of_at` sound has no escape hatch. Confirmed by review; deferred because the alternative (accepting backwards time) breaks bitemporal reads, and the real fix belongs with the storage layer's clock story. |
 
 ## Room 3 · Unknown knowns
