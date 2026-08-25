@@ -643,7 +643,15 @@ impl<'a> Retriever<'a> {
 
         let mut scanned = 0usize;
         let mut ranked: Vec<(RecordId, f64)> = Vec::new();
-        match query.probe {
+        // An index built without neighbourhoods cannot be probed. Scanning it
+        // is slower and right, where probing it would return nothing at all and
+        // look like an empty corpus — so the fallback is to the correct answer,
+        // and `scanned` says which happened.
+        let plan = match query.probe {
+            Probe::Neighbourhoods { .. } if !index.is_searchable() => Probe::Exact,
+            other => other,
+        };
+        match plan {
             Probe::Exact => {
                 for (id, embedded) in index.iter() {
                     scanned += 1;
@@ -1800,7 +1808,7 @@ mod vector_tests {
         let projection = Projection::rebuild(&ledger);
         let index = TextIndex::rebuild(&ledger);
         let embedder = HashingEmbedder::default();
-        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+        let vectors = crate::embedding::VectorIndex::rebuild_searchable(&ledger, &embedder);
 
         let found = index
             .retriever(&ledger, &projection, ViewSpec::now())
@@ -1839,7 +1847,7 @@ mod vector_tests {
         let projection = Projection::rebuild(&ledger);
         let index = TextIndex::rebuild(&ledger);
         let embedder = HashingEmbedder::default();
-        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+        let vectors = crate::embedding::VectorIndex::rebuild_searchable(&ledger, &embedder);
         let retriever = index
             .retriever(&ledger, &projection, ViewSpec::now())
             .with_vectors(&vectors, &embedder);
@@ -1855,6 +1863,32 @@ mod vector_tests {
         // Published, not inferred: an approximation nobody can see the size of
         // is one nobody can judge.
         assert!(approx.scanned > 0);
+    }
+
+    /// The safe direction to fail: an index built without neighbourhoods cannot
+    /// be probed, so it is scanned. Slower and right, where probing it would
+    /// return nothing and look exactly like an empty corpus.
+    #[test]
+    fn a_probe_asked_of_an_index_that_cannot_be_probed_falls_back_to_the_truth() {
+        let (ledger, _) = fixture();
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let plain = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+        assert!(!plain.is_searchable());
+
+        let asked = Query {
+            probe: Probe::Neighbourhoods { want: 1, max_buckets: 1 },
+            ..Query::text("engine license")
+        };
+        let found = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&plain, &embedder)
+            .retrieve(&asked);
+
+        assert!(!found.items.is_empty(), "an unprobeable index is scanned, not skipped");
+        // And it says so: everything was read, which is what exact means.
+        assert_eq!(found.scanned, plain.len());
     }
 
     #[test]

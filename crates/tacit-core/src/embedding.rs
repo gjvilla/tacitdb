@@ -186,6 +186,10 @@ pub struct VectorIndex {
     /// known, and derived from a fixed seed, so two indexes over one model
     /// divide the space the same way.
     planes: Vec<Vec<Vec<f32>>>,
+    /// Whether this index maintains neighbourhoods at all. Off unless a caller
+    /// asks: signatures over every vector are a real cost, and an index nobody
+    /// is going to probe should not pay it (U-36).
+    neighbourhoods: bool,
 }
 
 impl VectorIndex {
@@ -196,6 +200,7 @@ impl VectorIndex {
             vectors: BTreeMap::new(),
             buckets: Vec::new(),
             planes: Vec::new(),
+            neighbourhoods: false,
         }
     }
 
@@ -203,6 +208,63 @@ impl VectorIndex {
         let mut index = Self::empty(embedder.model_id());
         index.advance(ledger, embedder);
         index
+    }
+
+    /// Keep neighbourhoods, so queries may probe instead of scanning.
+    ///
+    /// Opt-in, because the signatures are paid for at index time and held in
+    /// memory whether or not anything probes them, and the default plan does
+    /// not (D-0032). Calling this on an index that already holds vectors folds
+    /// the ones already there into buckets, so it can be turned on at any
+    /// point and the result is the same either way.
+    pub fn with_neighbourhoods(mut self) -> Self {
+        self.neighbourhoods = true;
+        let existing: Vec<(crate::id::RecordId, Vec<f32>)> =
+            self.vectors.iter().map(|(id, e)| (*id, e.vector.clone())).collect();
+        for (id, vector) in existing {
+            self.bucket(id, &vector);
+        }
+        self
+    }
+
+    /// A vector index with neighbourhoods, built from a ledger.
+    pub fn rebuild_searchable(
+        ledger: &crate::ledger::Ledger,
+        embedder: &dyn Embedder,
+    ) -> Self {
+        let mut index = Self::empty(embedder.model_id()).with_neighbourhoods();
+        index.advance(ledger, embedder);
+        index
+    }
+
+    /// Whether this index can be probed rather than scanned.
+    pub fn is_searchable(&self) -> bool {
+        self.neighbourhoods
+    }
+
+    /// How many records sit in neighbourhood buckets, counting a record once
+    /// per table it appears in. Zero unless neighbourhoods are kept — the size
+    /// of what they cost, published rather than estimated.
+    pub fn bucketed(&self) -> usize {
+        self.buckets.iter().map(|t| t.values().map(Vec::len).sum::<usize>()).sum()
+    }
+
+    /// File a vector into every table's bucket.
+    fn bucket(&mut self, id: crate::id::RecordId, vector: &[f32]) {
+        if !self.neighbourhoods || vector.is_empty() {
+            return;
+        }
+        if self.planes.is_empty() {
+            self.planes = hyperplanes(vector.len());
+            self.buckets = vec![BTreeMap::new(); TABLES];
+        }
+        for table in 0..self.planes.len() {
+            let signature = self.signature(table, vector);
+            let bucket = self.buckets[table].entry(signature).or_default();
+            if let Err(at) = bucket.binary_search(&id) {
+                bucket.insert(at, id);
+            }
+        }
     }
 
     /// Fold the log suffix this index has not seen.
@@ -224,17 +286,7 @@ impl VectorIndex {
             let Some(text) = crate::retrieval::indexable_text(record) else { continue };
             let content_hash = HashingEmbedder::hash(&text, 0);
             let vector = embedder.embed(&text);
-            if self.planes.is_empty() && !vector.is_empty() {
-                self.planes = hyperplanes(vector.len());
-                self.buckets = vec![BTreeMap::new(); TABLES];
-            }
-            for table in 0..self.planes.len() {
-                let signature = self.signature(table, &vector);
-                let bucket = self.buckets[table].entry(signature).or_default();
-                if let Err(at) = bucket.binary_search(id) {
-                    bucket.insert(at, *id);
-                }
-            }
+            self.bucket(*id, &vector);
             self.vectors.insert(*id, Embedded { vector, content_hash });
         }
         self.applied = log.len();
@@ -291,7 +343,7 @@ impl VectorIndex {
             table: 0,
             radius: 0,
             flips: Vec::new(),
-            done: self.planes.is_empty(),
+            done: !self.neighbourhoods || self.planes.is_empty(),
         }
     }
 }
@@ -446,6 +498,59 @@ mod tests {
         );
     }
 
+    fn ledger_of(count: usize) -> (crate::ledger::Ledger, Vec<crate::id::RecordId>) {
+        use crate::content::{ClaimContent, Content};
+        use crate::envelope::{Author, SourceRef};
+        use crate::record::Draft;
+
+        let mut ledger = crate::ledger::Ledger::new();
+        let subject = ledger.add_entity("topic", "t").unwrap();
+        let ids = (0..count)
+            .map(|i| {
+                ledger
+                    .append(Draft::new(
+                        Author::human("G"),
+                        SourceRef::channel("c"),
+                        Content::Claim(ClaimContent::Text {
+                            body: format!("record {i} about fasteners and torque"),
+                            about: vec![subject],
+                        }),
+                    ))
+                    .unwrap()
+            })
+            .collect();
+        (ledger, ids)
+    }
+
+    #[test]
+    fn an_index_nobody_will_probe_pays_nothing_for_neighbourhoods() {
+        let (ledger, _) = ledger_of(40);
+        let embedder = HashingEmbedder::default();
+
+        let plain = VectorIndex::rebuild(&ledger, &embedder);
+        assert!(!plain.is_searchable());
+        assert_eq!(plain.bucketed(), 0, "no signatures kept for a probe nobody calls");
+        assert_eq!(plain.neighbourhoods(&embedder.embed("fasteners")).count(), 0);
+
+        let searchable = VectorIndex::rebuild_searchable(&ledger, &embedder);
+        assert!(searchable.is_searchable());
+        // One entry per vector per table: the cost, stated rather than guessed.
+        assert_eq!(searchable.bucketed(), searchable.len() * TABLES);
+        assert_eq!(searchable.len(), plain.len(), "the vectors themselves are the same");
+    }
+
+    #[test]
+    fn neighbourhoods_can_be_turned_on_at_any_point() {
+        let (ledger, _) = ledger_of(40);
+        let embedder = HashingEmbedder::default();
+
+        // Built with them from the start, versus filled in afterwards. An index
+        // is what it holds, not the order it was told to hold it.
+        let from_the_start = VectorIndex::rebuild_searchable(&ledger, &embedder);
+        let after_the_fact = VectorIndex::rebuild(&ledger, &embedder).with_neighbourhoods();
+        assert_eq!(from_the_start, after_the_fact);
+    }
+
     #[test]
     fn a_vector_is_in_the_neighbourhood_it_hashes_into() {
         use crate::content::{ClaimContent, Content};
@@ -470,7 +575,7 @@ mod tests {
             );
         }
         let embedder = HashingEmbedder::default();
-        let index = VectorIndex::rebuild(&ledger, &embedder);
+        let index = VectorIndex::rebuild_searchable(&ledger, &embedder);
 
         // A record's own text must reach it in the very first neighbourhood
         // returned, or the traversal is not searching where it is storing.

@@ -310,14 +310,15 @@ proptest! {
         let mut interp = Interpreter::new();
         let embedder = crate::embedding::HashingEmbedder::default();
         let model = crate::embedding::Embedder::model_id(&embedder).to_string();
-        let mut incremental = crate::embedding::VectorIndex::empty(&model);
+        let mut incremental =
+            crate::embedding::VectorIndex::empty(&model).with_neighbourhoods();
         for op in &ops {
             interp.run(std::slice::from_ref(op));
             incremental.advance(&interp.ledger, &embedder);
         }
         prop_assert_eq!(
             &incremental,
-            &crate::embedding::VectorIndex::rebuild(&interp.ledger, &embedder)
+            &crate::embedding::VectorIndex::rebuild_searchable(&interp.ledger, &embedder)
         );
         prop_assert_eq!(incremental.advance(&interp.ledger, &embedder), 0);
     }

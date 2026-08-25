@@ -1342,6 +1342,53 @@ U-26 had before: it had a shape to build and no bar to clear.
 
 ---
 
+## D-0033 · An option costs nothing until someone takes it
+
+```yaml
+id: D-0033
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: scale round — resolves U-36
+evidence: [docs/REGISTER.md, docs/DECISIONS.md]
+review_trigger: when probing becomes the default plan, or when the neighbourhood
+  index is removed
+```
+
+**Assertion.** Neighbourhoods are kept only if a caller asks for them.
+`VectorIndex::rebuild` keeps none; `rebuild_searchable` keeps them, and
+`with_neighbourhoods` fills them in on an index that already holds vectors. A
+probe asked of an index that cannot be probed falls back to scanning.
+
+**Measured in one run rather than remembered from two.** Building the same
+35,480 vectors takes 2.02s without neighbourhoods and 2.50s with — a quarter
+again — and the buckets hold 283,840 record ids, about 4.5 MB, roughly 128 bytes
+of index for every vector. U-36 estimated 2.0 to 2.4 seconds and was close, which
+is worth recording precisely because this week's estimates have mostly not been.
+
+**Every caller that exists takes the cheap one.** The host, the dogfood, the
+golden suite and the retrieval diagnostic all build a plain index and pay none of
+the above. Only the scale measurement builds the other, because it is the only
+thing that probes.
+
+**Falling back to scanning is the safe direction.** An unprobeable index returns
+no neighbourhoods, so a probe against one would come back empty and look exactly
+like an empty corpus — a wrong answer that reads as an honest one, which is the
+failure this project cares most about. Scanning is slower and right, and
+`Retrieved::scanned` says which happened. What it does not do is *warn*: a caller
+who asks to probe and quietly gets an exact scan has a configuration mistake
+visible only to someone reading the number.
+
+**And the same edit nearly removed the test that guards it.** Making
+neighbourhoods opt-in meant the property test asserting `incremental ==
+rebuild` — added one record ago specifically to cover the buckets — silently
+went back to testing an index that no longer had any. Changing a default is
+enough to hollow out a test without touching it, which is worth remembering the
+next time a default moves.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

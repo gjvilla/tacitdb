@@ -84,8 +84,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  text index rebuild {:>8.2?}", t.elapsed());
     let embedder = HashingEmbedder::default();
     let t = Instant::now();
-    let vectors = VectorIndex::rebuild(&ledger, &embedder);
-    println!("  vector rebuild     {:>8.2?}  ({} vectors)", t.elapsed(), vectors.len());
+    let plain = VectorIndex::rebuild(&ledger, &embedder);
+    let plain_build = t.elapsed();
+    let t = Instant::now();
+    let vectors = VectorIndex::rebuild_searchable(&ledger, &embedder);
+    println!("  vector rebuild     {:>8.2?}  ({} vectors)", plain_build, plain.len());
+    println!(
+        "  ^ with neighbourhoods {:>5.2?}  ({} bucket entries, {:.1} MB of ids) — the cost of\n             an option, paid only when asked for (U-36)",
+        t.elapsed(),
+        vectors.bucketed(),
+        vectors.bucketed() as f64 * 16.0 / 1e6
+    );
 
     rule("RETRIEVAL, AGAINST KNOWN GROUND TRUTH");
     // Each topic's vocabulary appears in that topic and nowhere else, so the
