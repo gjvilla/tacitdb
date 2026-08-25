@@ -806,8 +806,21 @@ impl Ledger {
     /// cardinality ("can this predicate hold twice?") is semantics, not
     /// grammar — that boundary is U-15.
     pub fn contradictions(&self) -> Vec<Contradiction<'_>> {
+        self.contradictions_at(Timestamp::now())
+    }
+
+    /// The same, as the ledger knew it at `at`.
+    ///
+    /// Every other read here has a temporal twin and this one did not, so the
+    /// question "what did we hold to be contradictory last Tuesday" had no
+    /// answer — in an engine whose whole claim is that you can ask what the
+    /// record said at a time (U-14).
+    pub fn contradictions_at(&self, at: Timestamp) -> Vec<Contradiction<'_>> {
+        let promoted_then = |record: &Record| {
+            self.state_of_at(record.id(), at) == Some(RecordState::Claim(ClaimState::Promoted))
+        };
         let mut groups: BTreeMap<(EntityId, &str), Vec<&Record>> = BTreeMap::new();
-        for record in self.promoted_claims() {
+        for record in self.records().filter(|r| promoted_then(r)) {
             if let Content::Claim(ClaimContent::Attribute { subject, name, .. }) = record.content()
             {
                 groups.entry((*subject, name.as_str())).or_default().push(record);
@@ -1428,6 +1441,102 @@ mod tests {
         assert_eq!(ledger.state_of(new_a), Some(RecordState::Claim(ClaimState::Promoted)));
         assert_eq!(ledger.state_of(old_b), Some(RecordState::Claim(ClaimState::Retired)));
         assert_eq!(ledger.record(new_b).unwrap().envelope().supersedes(), Some(old_b));
+    }
+
+    // ── U-14: corrections of corrections ────────────────────────────────────
+
+    /// The case U-14 named first: a claim replaced, and its replacement
+    /// replaced again. Each record's state at each moment, read back.
+    #[test]
+    fn a_correction_of_a_correction_reads_back_at_every_moment() {
+        let (mut ledger, _, subject) = setup();
+        let a = ledger.append_at(attribute_claim(subject, Author::human("Greg")), ts(10)).unwrap();
+        ledger.append_at(promote(a), ts(20)).unwrap();
+
+        let mut second = attribute_claim(subject, Author::human("Greg"));
+        second.supersedes = Some(a);
+        let b = ledger.append_at(second, ts(30)).unwrap();
+        ledger
+            .append_at(
+                verdict(
+                    VerdictAction::Promote { target: b, retiring: Some(a) },
+                    Author::human("Greg"),
+                ),
+                ts(40),
+            )
+            .unwrap();
+
+        let mut third = attribute_claim(subject, Author::human("Greg"));
+        third.supersedes = Some(b);
+        let c = ledger.append_at(third, ts(50)).unwrap();
+        ledger
+            .append_at(
+                verdict(
+                    VerdictAction::Promote { target: c, retiring: Some(b) },
+                    Author::human("Greg"),
+                ),
+                ts(60),
+            )
+            .unwrap();
+
+        let proposed = Some(RecordState::Claim(ClaimState::Proposed));
+        let promoted = Some(RecordState::Claim(ClaimState::Promoted));
+        let retired = Some(RecordState::Claim(ClaimState::Retired));
+
+        // A: proposed, then promoted, then retired when B replaced it, and
+        // retired ever after. The past does not change as the present does.
+        assert_eq!(ledger.state_of_at(a, ts(10)), proposed);
+        assert_eq!(ledger.state_of_at(a, ts(20)), promoted);
+        assert_eq!(ledger.state_of_at(a, ts(39)), promoted);
+        assert_eq!(ledger.state_of_at(a, ts(40)), retired);
+        assert_eq!(ledger.state_of_at(a, ts(60)), retired);
+
+        // B: did not exist at 20, promoted at 40, retired at 60.
+        assert_eq!(ledger.state_of_at(b, ts(20)), None);
+        assert_eq!(ledger.state_of_at(b, ts(30)), proposed);
+        assert_eq!(ledger.state_of_at(b, ts(40)), promoted);
+        assert_eq!(ledger.state_of_at(b, ts(60)), retired);
+
+        // C: the current wording, and only from 60.
+        assert_eq!(ledger.state_of_at(c, ts(40)), None);
+        assert_eq!(ledger.state_of_at(c, ts(60)), promoted);
+        assert_eq!(ledger.state_of(c), promoted);
+
+        // And the chain of supersession is readable in either direction.
+        assert_eq!(ledger.record(c).unwrap().envelope().supersedes(), Some(b));
+        assert_eq!(ledger.replaced_by(a), &[b]);
+    }
+
+    /// Overlap is the other half of U-14, and it has a past tense now: two
+    /// promoted claims about one attribute with overlapping validity are a
+    /// contradiction *while both are promoted*, and stop being one when the
+    /// first is retired — which is a fact about a moment, not about now.
+    #[test]
+    fn a_contradiction_can_be_asked_about_in_the_past_tense() {
+        let (mut ledger, _, subject) = setup();
+        let a = ledger.append_at(attribute_claim(subject, Author::human("Greg")), ts(10)).unwrap();
+        ledger.append_at(promote(a), ts(20)).unwrap();
+        let b = ledger.append_at(attribute_claim(subject, Author::human("Greg")), ts(30)).unwrap();
+        ledger.append_at(promote(b), ts(40)).unwrap();
+
+        // Both promoted, same attribute, both open-ended: a contradiction.
+        assert_eq!(ledger.contradictions_at(ts(40)).len(), 1);
+        assert_eq!(ledger.contradictions_at(ts(20)).len(), 0, "b did not exist yet");
+
+        ledger
+            .append_at(
+                verdict(
+                    VerdictAction::Retire { target: a, reason: RetireReason::NoLongerTrue },
+                    Author::human("Greg"),
+                ),
+                ts(50),
+            )
+            .unwrap();
+
+        // Resolved now, and still true of then. History is not rewritten by
+        // fixing something.
+        assert_eq!(ledger.contradictions().len(), 0);
+        assert_eq!(ledger.contradictions_at(ts(40)).len(), 1);
     }
 
     // ── U-28: withdrawing a question, and saying which kind ─────────────────

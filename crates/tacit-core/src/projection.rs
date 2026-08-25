@@ -285,6 +285,15 @@ impl Projection {
         self.frontier
     }
 
+    /// Whether this projection has folded the whole of a ledger's log.
+    ///
+    /// A view over a projection that is behind is still *correct* — it falls
+    /// back to folding the ledger — but it is paying for the staleness on every
+    /// read. A caller that wants the index's speed should advance it.
+    pub fn is_current(&self, ledger: &Ledger) -> bool {
+        self.applied >= ledger.log().len()
+    }
+
     /// How many log records have been folded.
     pub fn applied(&self) -> usize {
         self.applied
@@ -318,7 +327,13 @@ impl<'a> GraphView<'a> {
 
     fn state_at(&self, record: RecordId) -> Option<ClaimState> {
         let past = self.projection.frontier.is_some_and(|f| self.spec.record_time < f);
-        if past {
+        // The index may only answer for the present if it has actually seen the
+        // present. A projection that has not been advanced holds a fold of a
+        // shorter log, and answering "now" from it reported a retired claim as
+        // promoted — with the current ledger in hand, passed to this very call
+        // (U-14, D-0036). Falling back to the fold is slower and right.
+        let behind = self.projection.applied < self.ledger.log().len();
+        if past || behind {
             match self.ledger.state_of_at(record, self.spec.record_time) {
                 Some(RecordState::Claim(state)) => Some(state),
                 _ => None,
@@ -880,6 +895,49 @@ impl<'a> Property<'a> {
 
 #[cfg(test)]
 mod tests {
+    /// A projection that has not been advanced must not answer for the present
+    /// it has not seen. It used to: holding an index from before a retirement
+    /// and asking it about *now* — with the current ledger passed to the very
+    /// same call — reported the claim as still promoted (U-14, D-0036).
+    #[test]
+    fn a_projection_behind_the_ledger_does_not_answer_for_the_present() {
+        use crate::content::RetireReason;
+
+        let mut f = fixture();
+        let claim =
+            f.ledger.append(attribute(f.a, "spec_nm", 24.0, Author::human("Greg"))).unwrap();
+        f.ledger.append(promote(claim)).unwrap();
+        let stale = Projection::rebuild(&f.ledger);
+        assert!(stale.is_current(&f.ledger));
+        assert!(stale.view(&f.ledger, ViewSpec::now()).admits_record(claim));
+
+        f.ledger
+            .append(Draft::new(
+                Author::human("Greg"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Retire {
+                        target: claim,
+                        reason: RetireReason::NoLongerTrue,
+                    },
+                    rationale: None,
+                }),
+            ))
+            .unwrap();
+
+        // The index is now behind, and says so.
+        assert!(!stale.is_current(&f.ledger));
+        let now = Timestamp::now();
+        assert_eq!(
+            f.ledger.state_of_at(claim, now),
+            Some(RecordState::Claim(ClaimState::Retired))
+        );
+        // Slower and right beats confident and wrong: the view falls back to
+        // folding the ledger rather than trusting a fold of a shorter log.
+        assert!(!stale.view(&f.ledger, ViewSpec::at(now)).admits_record(claim));
+        assert!(!Projection::rebuild(&f.ledger).view(&f.ledger, ViewSpec::at(now)).admits_record(claim));
+    }
+
     use super::*;
     use crate::content::{GapContent, RetireReason, VerdictAction, VerdictContent};
     use crate::envelope::{Author, SourceRef};

@@ -1530,6 +1530,76 @@ make.
 
 ---
 
+## D-0036 · An index may only answer for a present it has seen
+
+```yaml
+id: D-0036
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: temporal round — resolves U-14
+evidence: [design/001-data-model.md §3.1, docs/REGISTER.md]
+review_trigger: when a view is held across a process boundary, or when the
+  reference semantics and the implementation are ever allowed to diverge
+```
+
+**Assertion.** The temporal reads now have a reference semantics — the state
+machine of §3.1 written out separately, short enough to be obviously right — and
+eight properties hold the implementation against it over generated ledgers. A
+projection that has not folded the whole log no longer answers for the present,
+and `contradictions_at` gives overlap the past tense every other read already
+had.
+
+**The defect the properties were written to find, and did.** A view over a stale
+projection reported a retired claim as promoted, when asked about *now*, with the
+current ledger passed to the very same call. The index has a fast path for
+"record-time at or after my frontier — use my own fold", which is sound only if
+the fold is current, and nothing checked that it was. The keeper layer knew to
+advance after every write and the engine let anyone who forgot get a confident
+wrong answer. It falls back to folding the ledger now: slower and right, the same
+direction to fail as D-0033.
+
+**A reference is only worth having if it is derived independently.** This one is
+transcribed from the design document's transition table, not from the code that
+answers the question — a reference copied off the implementation agrees with it
+by construction and proves nothing. It is checked at every record-time in the
+ledger and the instants either side of each, because that is where a boundary is
+off by one.
+
+**Six properties passed on the first run, and taking that as reassurance was the mistake.**
+They tied both temporal axes to one instant, which exercises the cross-product
+only by accident, and they used an index advanced after every operation. Pulling
+the axes apart found nothing. Holding an index while the world moved on found the
+defect immediately. The lesson is not "write properties" but "write the property
+that could fail" — a suite that only tests the arrangement the code was written
+for is a suite that agrees with it.
+
+**And writing this record moved the score, which is the finding inside the
+finding.** Two ordinary words of prose in the paragraph above were rare terms of
+a golden question, and their arrival lifted that question from failing to
+passing — an apparent gain of one, caused entirely by describing the work. It was
+caught by reading the diagnostic rather than banking the number, and the words
+were changed. Three times in one day now, and this was the first where the
+contamination flattered the result: a score that moves the wrong way gets
+investigated, and one that moves the right way does not. The phrase check added
+for U-27 cannot see this — it catches quotations, and these were not quotations.
+The structural answer already exists and is not being used: a corpus the record
+does not describe was built for U-9 and the suite still grades on this one.
+
+**Overlap has a past tense now.** `contradictions` was the one read with no
+temporal twin, so "what did we hold to be contradictory last Tuesday" had no
+answer in an engine whose entire claim is that you can ask what the record said
+at a time. A contradiction resolved today was still a contradiction then, and
+saying so is not a defect in the resolution.
+
+**What the corrections-of-corrections case actually does, written out.** A claim
+replaced, its replacement replaced again, and each record's state read back at
+every moment: the past does not move as the present does. It was already correct.
+It is now written down as a test rather than as a belief.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

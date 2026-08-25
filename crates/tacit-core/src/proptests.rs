@@ -31,6 +31,8 @@ enum Op {
     Promote { claim: u8, retiring: Option<u8> },
     Reject { claim: u8 },
     Retire { claim: u8 },
+    PromoteSet { first: u8, count: u8 },
+    Withdraw { gap: u8 },
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -49,7 +51,115 @@ fn op_strategy() -> impl Strategy<Value = Op> {
             .prop_map(|(claim, retiring)| Op::Promote { claim, retiring }),
         2 => any::<u8>().prop_map(|claim| Op::Reject { claim }),
         3 => any::<u8>().prop_map(|claim| Op::Retire { claim }),
+        3 => (any::<u8>(), 1u8..5).prop_map(|(first, count)| Op::PromoteSet { first, count }),
+        2 => any::<u8>().prop_map(|gap| Op::Withdraw { gap }),
     ]
+}
+
+/// What the temporal reads are *supposed* to say, transcribed from
+/// `design/001-data-model.md` §3.1 rather than from the code that answers them.
+///
+/// The point of writing it out separately is that it is short enough to be
+/// obviously right. A record the ledger had not yet recorded has no state; a
+/// verdict has none of its own; otherwise start at the kind's opening state and
+/// apply, in log order, every verdict recorded by `at`. If the implementation
+/// and this disagree, one of them is wrong and the disagreement says where to
+/// look — which is what U-14 asked for.
+mod reference {
+    use super::*;
+    use crate::content::SetBasis;
+    use crate::state::{ClaimState, GapState, HypothesisState};
+
+    /// Where a verdict puts one record, independent of what state it is in.
+    /// The transition table of §3.1, and nothing else.
+    fn moves_to(action: &VerdictAction, id: RecordId) -> Option<RecordState> {
+        use VerdictAction as A;
+        let claim = |s| Some(RecordState::Claim(s));
+        match action {
+            A::Promote { target, retiring } => {
+                if *target == id {
+                    claim(ClaimState::Promoted)
+                } else if *retiring == Some(id) {
+                    claim(ClaimState::Retired)
+                } else {
+                    None
+                }
+            }
+            A::PromoteSet { targets, retiring, basis } => {
+                let _: &SetBasis = basis;
+                if targets.contains(&id) {
+                    claim(ClaimState::Promoted)
+                } else if retiring.contains(&id) {
+                    claim(ClaimState::Retired)
+                } else {
+                    None
+                }
+            }
+            A::Retire { target, .. } if *target == id => claim(ClaimState::Retired),
+            A::Reject { target } if *target == id => claim(ClaimState::Rejected),
+            A::Answer { gap, .. } if *gap == id => Some(RecordState::Gap(GapState::Answered)),
+            A::Withdraw { gap, .. } if *gap == id => {
+                Some(RecordState::Gap(GapState::Withdrawn))
+            }
+            A::Abandon { hypothesis, .. } if *hypothesis == id => {
+                Some(RecordState::Hypothesis(HypothesisState::Abandoned))
+            }
+            A::Score { hypothesis, outcome } if *hypothesis == id => {
+                Some(RecordState::Hypothesis(HypothesisState::Scored(*outcome)))
+            }
+            _ => None,
+        }
+    }
+
+    fn opening(kind: crate::content::RecordKind) -> RecordState {
+        use crate::content::RecordKind as K;
+        match kind {
+            K::Claim => RecordState::Claim(ClaimState::Proposed),
+            K::Gap => RecordState::Gap(GapState::Registered),
+            K::Hypothesis => RecordState::Hypothesis(HypothesisState::Registered),
+            K::Verdict => RecordState::Verdict,
+        }
+    }
+
+    /// The state of `id` as the ledger knew it at `at`.
+    pub fn state_at(ledger: &Ledger, id: RecordId, at: Timestamp) -> Option<RecordState> {
+        let record = ledger.record(id)?;
+        // Not yet learned is not the same as having no state.
+        if record.envelope().recorded_at() > at {
+            return None;
+        }
+        if record.kind() == crate::content::RecordKind::Verdict {
+            return Some(RecordState::Verdict);
+        }
+        let mut state = opening(record.kind());
+        // Log order is the definition of order, and only what was recorded by
+        // `at` may speak.
+        for other in ledger.records() {
+            if other.envelope().recorded_at() > at {
+                continue;
+            }
+            let Content::Verdict(v) = other.content() else { continue };
+            if let Some(next) = moves_to(&v.action, id) {
+                state = next;
+            }
+        }
+        Some(state)
+    }
+
+    /// Every record-time in the ledger, and the instants either side of each —
+    /// where an off-by-one in a boundary lives.
+    pub fn interesting_times(ledger: &Ledger) -> Vec<Timestamp> {
+        let mut times: Vec<Timestamp> = Vec::new();
+        for record in ledger.records() {
+            let at = record.envelope().recorded_at();
+            times.push(at);
+            times.push(at - jiff::SignedDuration::from_nanos(1));
+            times.push(at + jiff::SignedDuration::from_nanos(1));
+        }
+        times.sort_unstable();
+        times.dedup();
+        times
+    }
 }
 
 /// Runs a script against a ledger, advancing an incremental projection after
@@ -61,6 +171,7 @@ struct Interpreter {
     index: TextIndex,
     entities: Vec<EntityId>,
     claims: Vec<RecordId>,
+    gaps: Vec<RecordId>,
     clock: i64,
 }
 
@@ -72,6 +183,7 @@ impl Interpreter {
             index: TextIndex::empty(),
             entities: Vec::new(),
             claims: Vec::new(),
+            gaps: Vec::new(),
             clock: 0,
         }
     }
@@ -173,7 +285,9 @@ impl Interpreter {
                     SourceRef::channel("proptest"),
                     Content::Gap(GapContent { question: "q".into(), territory }),
                 );
-                let _ = self.ledger.append_at(draft, at);
+                if let Ok(id) = self.ledger.append_at(draft, at) {
+                    self.gaps.push(id);
+                }
             }
             Op::Promote { claim, retiring } => {
                 let Some(target) = Self::pick(&self.claims, *claim) else { return };
@@ -185,6 +299,37 @@ impl Interpreter {
             Op::Reject { claim } => {
                 let Some(target) = Self::pick(&self.claims, *claim) else { return };
                 self.verdict(VerdictAction::Reject { target }, at);
+            }
+            Op::PromoteSet { first, count } => {
+                if self.claims.is_empty() {
+                    return;
+                }
+                let start = *first as usize % self.claims.len();
+                let mut targets: Vec<RecordId> = Vec::new();
+                for i in 0..*count as usize {
+                    let id = self.claims[(start + i) % self.claims.len()];
+                    if !targets.contains(&id) {
+                        targets.push(id);
+                    }
+                }
+                self.verdict(
+                    VerdictAction::PromoteSet {
+                        targets,
+                        retiring: Vec::new(),
+                        basis: crate::content::SetBasis::Ingestion,
+                    },
+                    at,
+                );
+            }
+            Op::Withdraw { gap } => {
+                let Some(target) = Self::pick(&self.gaps, *gap) else { return };
+                self.verdict(
+                    VerdictAction::Withdraw {
+                        gap: target,
+                        reason: crate::content::WithdrawReason::NoLongerRelevant,
+                    },
+                    at,
+                );
             }
             Op::Retire { claim } => {
                 let Some(target) = Self::pick(&self.claims, *claim) else { return };
@@ -321,6 +466,228 @@ proptest! {
             &crate::embedding::VectorIndex::rebuild_searchable(&interp.ledger, &embedder)
         );
         prop_assert_eq!(incremental.advance(&interp.ledger, &embedder), 0);
+    }
+
+    // ── U-14: the temporal reads, against a reference semantics ─────────────
+
+    /// The read the whole bitemporal claim rests on, checked against the
+    /// definition at every record-time in the ledger and the instants either
+    /// side of each — which is where an off-by-one in a boundary lives.
+    #[test]
+    fn state_of_at_agrees_with_the_reference(ops in prop::collection::vec(op_strategy(), 0..50)) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        let ids: Vec<RecordId> = interp.ledger.log().to_vec();
+        for at in reference::interesting_times(&interp.ledger) {
+            for id in &ids {
+                prop_assert_eq!(
+                    interp.ledger.state_of_at(*id, at),
+                    reference::state_at(&interp.ledger, *id, at),
+                    "at {} for {}", at, id
+                );
+            }
+        }
+    }
+
+    /// `state_of` is not a separate mechanism; it is the temporal read at now.
+    /// If these could disagree, every current answer would be a second opinion.
+    #[test]
+    fn the_current_state_is_the_temporal_read_at_now(ops in prop::collection::vec(op_strategy(), 0..40)) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        let now = Timestamp::now();
+        for id in interp.ledger.log() {
+            prop_assert_eq!(
+                interp.ledger.state_of(*id),
+                interp.ledger.state_of_at(*id, now)
+            );
+        }
+    }
+
+    /// Knowledge only accumulates. A record the ledger knew about at one moment
+    /// is known at every later one — history is never rewritten, so nothing can
+    /// vanish from it.
+    #[test]
+    fn knowledge_only_accumulates(ops in prop::collection::vec(op_strategy(), 0..40)) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        let times = reference::interesting_times(&interp.ledger);
+        for id in interp.ledger.log() {
+            let mut seen = false;
+            for at in &times {
+                let known = interp.ledger.state_of_at(*id, *at).is_some();
+                if seen {
+                    prop_assert!(known, "{} vanished from history at {}", id, at);
+                }
+                seen |= known;
+            }
+        }
+    }
+
+    /// Recorded-at is the instant a record becomes visible: invisible the
+    /// nanosecond before, visible at it. Both boundaries are inclusive of the
+    /// same instant, and a mismatch here is what makes a same-tick verdict
+    /// flip a test under load.
+    #[test]
+    fn a_record_appears_exactly_when_it_was_recorded(ops in prop::collection::vec(op_strategy(), 0..30)) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        for id in interp.ledger.log() {
+            let at = interp.ledger.record(*id).unwrap().envelope().recorded_at();
+            prop_assert!(interp.ledger.state_of_at(*id, at).is_some(), "{} at its own record-time", id);
+            prop_assert!(
+                interp.ledger
+                    .state_of_at(*id, at - jiff::SignedDuration::from_nanos(1))
+                    .is_none(),
+                "{} was visible before it was recorded", id
+            );
+        }
+    }
+
+    /// One state, two readers. A view at record-time `t` must admit only what
+    /// the ledger says was true at `t` — the projection keeps its own answer
+    /// and the two agreeing is not something to assume.
+    #[test]
+    fn a_view_admits_only_what_the_ledger_says_at_that_record_time(
+        ops in prop::collection::vec(op_strategy(), 0..40)
+    ) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        for at in reference::interesting_times(&interp.ledger) {
+            // Both axes at the same instant: the ordinary as-of query.
+            let spec = ViewSpec::at(at);
+            let view = interp.incremental.view(&interp.ledger, spec);
+            for id in interp.ledger.log() {
+                if !view.admits_record(*id) {
+                    continue;
+                }
+                let state = interp.ledger.state_of_at(*id, at);
+                prop_assert!(
+                    matches!(
+                        state,
+                        Some(RecordState::Claim(crate::state::ClaimState::Promoted))
+                            | Some(RecordState::Gap(crate::state::GapState::Registered))
+                            | Some(RecordState::Hypothesis(
+                                crate::state::HypothesisState::Registered
+                            ))
+                    ),
+                    "the default view admitted {} at {} whose state then was {:?}",
+                    id, at, state
+                );
+            }
+        }
+    }
+
+    /// A view over a projection that has not been advanced must still agree
+    /// with the ledger. The index is an optimisation of the fold, and an
+    /// optimisation that answers differently is not one.
+    #[test]
+    fn a_stale_projection_still_agrees_with_the_ledger(
+        first in prop::collection::vec(op_strategy(), 0..25),
+        then in prop::collection::vec(op_strategy(), 1..25),
+    ) {
+        let mut interp = Interpreter::new();
+        interp.run(&first);
+        // Taken here and held while the world moves on.
+        let stale = interp.incremental.clone();
+        interp.run(&then);
+
+        for at in reference::interesting_times(&interp.ledger) {
+            let view = stale.view(&interp.ledger, ViewSpec::at(at));
+            for id in interp.ledger.log() {
+                if !view.admits_record(*id) {
+                    continue;
+                }
+                prop_assert!(
+                    interp.ledger.state_of_at(*id, at).is_some(),
+                    "a stale view admitted {} at {}, which the ledger had not recorded", id, at
+                );
+                if interp.ledger.record(*id).unwrap().kind() == crate::content::RecordKind::Claim {
+                    prop_assert_eq!(
+                        interp.ledger.state_of_at(*id, at),
+                        Some(RecordState::Claim(crate::state::ClaimState::Promoted)),
+                        "a stale view admitted {} at {} on a state the ledger disagrees with", id, at
+                    );
+                }
+            }
+        }
+    }
+
+    /// The headline claim, with the axes pulled apart: "what did the record say
+    /// at T1 about what was true at T2". Every property above ties them to one
+    /// instant, which exercises the cross-product only by accident.
+    #[test]
+    fn the_two_axes_hold_independently(
+        ops in prop::collection::vec(op_strategy(), 0..40),
+        record_ix in 0usize..64,
+        valid_ix in 0usize..64,
+    ) {
+        let mut interp = Interpreter::new();
+        interp.run(&ops);
+        let times = reference::interesting_times(&interp.ledger);
+        if times.is_empty() {
+            return Ok(());
+        }
+        let record_time = times[record_ix % times.len()];
+        let valid_at = times[valid_ix % times.len()];
+
+        let view = interp
+            .incremental
+            .view(&interp.ledger, ViewSpec::bitemporal(record_time, valid_at));
+        for id in interp.ledger.log() {
+            if !view.admits_record(*id) {
+                continue;
+            }
+            let record = interp.ledger.record(*id).unwrap();
+            // Three independent conditions, each on its own axis.
+            prop_assert!(
+                record.envelope().recorded_at() <= record_time,
+                "{} admitted at a record-time before it existed", id
+            );
+            prop_assert!(
+                record.envelope().validity().contains(valid_at),
+                "{} admitted at {} which its validity does not contain", id, valid_at
+            );
+            prop_assert!(
+                interp.ledger.state_of_at(*id, record_time).is_some(),
+                "{} admitted with no state at {}", id, record_time
+            );
+        }
+    }
+
+    /// Valid-time is one half-open interval `[from, to)` with one definition,
+    /// and the two readers of it must agree: two intervals overlap exactly when
+    /// some instant falls in both.
+    #[test]
+    fn overlap_is_exactly_a_shared_instant(
+        a in (0i64..40, proptest::option::of(0i64..40)),
+        b in (0i64..40, proptest::option::of(0i64..40)),
+        probes in prop::collection::vec(0i64..40, 1..12),
+    ) {
+        let make = |(from, span): (i64, Option<i64>)| {
+            let start = Timestamp::from_second(1_700_000_000 + from).unwrap();
+            crate::validity::Validity::new(
+                start,
+                span.map(|s| start + jiff::SignedDuration::from_secs(s)),
+            )
+        };
+        let (Some(a), Some(b)) = (make(a), make(b)) else { return Ok(()) };
+
+        // Symmetric, and every containment is inside the declared bounds.
+        prop_assert_eq!(a.overlaps(&b), b.overlaps(&a));
+        prop_assert!(a.contains(a.from()));
+        if let Some(end) = a.to() {
+            prop_assert!(!a.contains(end), "half-open at the far end");
+        }
+
+        // A shared instant implies overlap. The converse needs a witness, so it
+        // is sampled rather than claimed.
+        for p in probes {
+            let t = Timestamp::from_second(1_700_000_000 + p).unwrap();
+            if a.contains(t) && b.contains(t) {
+                prop_assert!(a.overlaps(&b), "{:?} and {:?} share {}", a, b, t);
+            }
+        }
     }
 
     /// Retrieval is a pure read and never outruns its budget; and whatever the
