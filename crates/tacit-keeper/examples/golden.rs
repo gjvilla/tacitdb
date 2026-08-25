@@ -146,6 +146,34 @@ fn main() -> ExitCode {
         println!("  record of what was once true.");
     }
 
+    // The half of U-27 the phrase check cannot reach. Recorded absence is the
+    // stable thing: a question agreed against words the corpus did not have
+    // stops measuring what it was agreed to measure the moment it acquires one,
+    // however properly that record was written.
+    let current = tacit_keeper::absent_vocabulary(&questions, &ledger);
+    let recorded = tacit_keeper::parse_baseline(&text);
+    let drifted = tacit_keeper::vocabulary_drift(&recorded, &current);
+    let unrecorded = tacit_keeper::missing_baseline(&recorded, &current);
+    if !drifted.is_empty() {
+        println!("\n\x1b[1mWORDS THE CORPUS HAS SINCE ACQUIRED\x1b[0m");
+        println!("{}", "─".repeat(64));
+        for (id, words) in &drifted {
+            println!("  {id}  now contains {}", words.join(", "));
+        }
+        println!();
+        println!("  Each of these was absent when the question was agreed. A question is no");
+        println!("  longer measuring what it was agreed to measure once the corpus can speak");
+        println!("  to a word it was chosen for. Re-read it, then re-record its baseline.");
+    }
+    if !unrecorded.is_empty() && std::env::var("GOLDEN_BASELINE").is_ok() {
+        println!("\n## Vocabulary baseline\n");
+        println!("| id | words the corpus did not contain |");
+        println!("|----|----------------------------------|");
+        for (id, words) in &current {
+            println!("| {id} | {} |", if words.is_empty() { "—".into() } else { words.join(" ") });
+        }
+    }
+
     // A corpus that describes its own retrieval failures will quote the
     // questions that fail, and then rank for them. Caught here because the
     // manual check U-27 asked for demonstrably does not happen: two of these
@@ -164,7 +192,7 @@ fn main() -> ExitCode {
         println!("  explaining a failure outranks the record that would answer it (U-27).");
     }
 
-    if card.regressions().is_empty() && stale.is_empty() && quoted.is_empty() {
+    if card.regressions().is_empty() && stale.is_empty() && quoted.is_empty() && drifted.is_empty() {
         println!();
         ExitCode::SUCCESS
     } else {
@@ -176,6 +204,9 @@ fn main() -> ExitCode {
         }
         if !quoted.is_empty() {
             println!("  {} question(s) quoted back by the corpus.", quoted.len());
+        }
+        if !drifted.is_empty() {
+            println!("  {} question(s) whose vocabulary the corpus has since acquired.", drifted.len());
         }
         println!();
         ExitCode::FAILURE

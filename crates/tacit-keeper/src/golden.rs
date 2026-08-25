@@ -12,7 +12,7 @@
 //! them into one number tells you nothing about what to fix.
 
 use crate::parse::ParseError;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tacit_core::{
     Content, Embedder, Ledger, Outcome, Projection, Query, Retrieved, TextIndex, VectorIndex,
     ViewSpec,
@@ -176,9 +176,16 @@ impl Scorecard {
 /// Parse the `## Questions` table of `docs/GOLDEN.md`.
 pub fn parse_golden(text: &str) -> Result<Vec<GoldenQuestion>, ParseError> {
     let mut questions = Vec::new();
+    // Section-aware, because the document holds two tables of `| G-` rows and
+    // a malformed row here is a hard error by design — which would make the
+    // baseline table below break the suite it exists to protect.
+    let mut in_baseline = false;
     for line in text.lines() {
         let trimmed = line.trim();
-        if !trimmed.starts_with("| G-") {
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            in_baseline = heading.to_lowercase().contains("baseline");
+        }
+        if in_baseline || !trimmed.starts_with("| G-") {
             continue;
         }
         let cells: Vec<&str> = trimmed
@@ -319,6 +326,105 @@ fn longest_shared_run(asked: &[String], text: &[String]) -> usize {
         }
     }
     best
+}
+
+/// The discriminating words of each question that the corpus does not contain.
+///
+/// Absence is the stable thing to record. Document frequency drifts with corpus
+/// size and reach drifts with it, so a baseline of either would cry wolf every
+/// time a record was written; whether a word is in the corpus at all does not
+/// move unless someone writes it.
+pub fn absent_vocabulary(
+    questions: &[GoldenQuestion],
+    ledger: &Ledger,
+) -> Vec<(String, Vec<String>)> {
+    let mut present: BTreeSet<String> = BTreeSet::new();
+    for record in ledger.records() {
+        if let Some(text) = tacit_core::indexable_text(record) {
+            present.extend(tacit_core::tokenize(&text));
+        }
+    }
+    let stop: BTreeSet<String> = tacit_core::Query::text("")
+        .stopwords
+        .iter()
+        .flat_map(|w| tacit_core::tokenize(w))
+        .collect();
+    questions
+        .iter()
+        .map(|question| {
+            let mut absent: Vec<String> = tacit_core::tokenize(&question.question)
+                .into_iter()
+                .filter(|t| !stop.contains(t) && !present.contains(t))
+                .collect();
+            absent.sort();
+            absent.dedup();
+            (question.id.clone(), absent)
+        })
+        .collect()
+}
+
+/// Read the recorded baseline out of the suite document.
+pub fn parse_baseline(text: &str) -> BTreeMap<String, Vec<String>> {
+    let mut baseline = BTreeMap::new();
+    let mut in_baseline = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            in_baseline = heading.to_lowercase().contains("baseline");
+        }
+        if !in_baseline {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("| G-") else { continue };
+        let cells: Vec<&str> = rest.split('|').map(str::trim).collect();
+        if cells.len() < 2 {
+            continue;
+        }
+        let words = if cells[1] == "—" {
+            Vec::new()
+        } else {
+            cells[1].split_whitespace().map(str::to_string).collect()
+        };
+        baseline.insert(format!("G-{}", cells[0]), words);
+    }
+    baseline
+}
+
+/// Words a question was agreed against that the corpus has since acquired.
+///
+/// This is the half of U-27 the phrase check cannot reach. A record that
+/// *quotes* a question is caught by [`quoted_questions`]; a record that merely
+/// uses one of its rare words is not, and that is what moved a question from
+/// failing to passing while nobody was looking. Absence is recorded when the
+/// question is agreed, and losing it means the question stopped measuring what
+/// it was agreed to measure — whether the new record was written carelessly or
+/// perfectly properly.
+pub fn vocabulary_drift(
+    recorded: &BTreeMap<String, Vec<String>>,
+    current: &[(String, Vec<String>)],
+) -> Vec<(String, Vec<String>)> {
+    let mut drifted = Vec::new();
+    for (id, absent_now) in current {
+        let Some(was_absent) = recorded.get(id) else { continue };
+        let arrived: Vec<String> =
+            was_absent.iter().filter(|w| !absent_now.contains(w)).cloned().collect();
+        if !arrived.is_empty() {
+            drifted.push((id.clone(), arrived));
+        }
+    }
+    drifted
+}
+
+/// Questions with no recorded baseline, and what theirs would be.
+pub fn missing_baseline(
+    recorded: &BTreeMap<String, Vec<String>>,
+    current: &[(String, Vec<String>)],
+) -> Vec<(String, Vec<String>)> {
+    current
+        .iter()
+        .filter(|(id, _)| !recorded.contains_key(id))
+        .cloned()
+        .collect()
 }
 
 pub fn run_with(
@@ -485,6 +591,91 @@ mod tests {
 
     /// A `pending` marker must name a registered unknown, or it is just a way
     /// of declaring the suite green.
+    #[test]
+    fn the_two_tables_do_not_read_each_other() {
+        let doc = "\
+| id | Question | Expected | Owner | Review trigger |
+|----|----------|----------|-------|----------------|
+| G-01 | what is the atomic unit of memory | answer D-0004 | Greg Villa | when the envelope changes |
+
+## Vocabulary baseline
+
+| id | words the corpus did not contain |
+|----|----------------------------------|
+| G-01 | sharding logo |
+| G-02 | — |
+";
+        // A malformed question row is a hard error by design, so a second
+        // table of `| G-` rows would have broken the suite it protects.
+        let questions = parse_golden(doc).expect("the baseline table is not a question table");
+        assert_eq!(questions.len(), 1);
+
+        let baseline = parse_baseline(doc);
+        assert_eq!(baseline.get("G-01").unwrap(), &["sharding", "logo"]);
+        assert!(baseline.get("G-02").unwrap().is_empty(), "an em dash is no words, not one word");
+    }
+
+    #[test]
+    fn a_word_the_corpus_acquires_is_what_the_phrase_check_cannot_see() {
+        let recorded: BTreeMap<String, Vec<String>> = [
+            ("G-01".to_string(), vec!["sharding".to_string(), "logo".to_string()]),
+            ("G-02".to_string(), vec!["cluster".to_string()]),
+        ]
+        .into_iter()
+        .collect();
+
+        // The corpus has since acquired `sharding`, and nothing else moved.
+        let current = vec![
+            ("G-01".to_string(), vec!["logo".to_string()]),
+            ("G-02".to_string(), vec!["cluster".to_string()]),
+            ("G-03".to_string(), vec!["unrecorded".to_string()]),
+        ];
+
+        let drifted = vocabulary_drift(&recorded, &current);
+        assert_eq!(drifted.len(), 1);
+        assert_eq!(drifted[0].0, "G-01");
+        assert_eq!(drifted[0].1, vec!["sharding".to_string()]);
+
+        // A question with no baseline is not drift — it is a baseline to record,
+        // which is a different thing to be told.
+        assert!(drifted.iter().all(|(id, _)| id != "G-03"));
+        let missing = missing_baseline(&recorded, &current);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].0, "G-03");
+    }
+
+    #[test]
+    fn absence_is_measured_against_what_the_corpus_actually_holds() {
+        use tacit_core::{Author, ClaimContent, Content, Draft, Ledger, SourceRef};
+
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("topic", "t").unwrap();
+        ledger
+            .append(Draft::new(
+                Author::human("G"),
+                SourceRef::channel("c"),
+                Content::Claim(ClaimContent::Text {
+                    body: "the fastener seats at twenty four newton metres".into(),
+                    about: vec![subject],
+                }),
+            ))
+            .unwrap();
+
+        let doc = "\
+| id | Question | Expected | Owner | Review trigger |
+|----|----------|----------|-------|----------------|
+| G-01 | what fastener torque is specified | answer D-0001 | G | never |
+";
+        let questions = parse_golden(doc).unwrap();
+        let absent = absent_vocabulary(&questions, &ledger);
+        assert_eq!(absent.len(), 1);
+        // `fastener` is in the corpus; `torque` and `specified` are not.
+        assert!(!absent[0].1.contains(&"fastener".to_string()));
+        assert!(absent[0].1.contains(&"torque".to_string()));
+        // And the stopword list is applied, or every question would look the same.
+        assert!(!absent[0].1.contains(&"what".to_string()));
+    }
+
     #[test]
     fn a_trigger_that_has_already_fired_is_caught() {
         let suite = "\

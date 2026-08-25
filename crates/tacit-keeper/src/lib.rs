@@ -20,7 +20,8 @@ pub use corpus::{
 pub use attest::{Attestation, Blame, Recheck, TrustReview, Verified, review_trust};
 pub use origin::Origin;
 pub use golden::{
-    Expectation, GoldenQuestion, Graded, Scorecard, Verdict, parse_golden, quoted_questions, stale_triggers,
+    Expectation, GoldenQuestion, Graded, Scorecard, Verdict, absent_vocabulary, missing_baseline, parse_baseline, parse_golden, quoted_questions,
+    stale_triggers, vocabulary_drift,
 };
 pub use parse::{ParseError, ParsedRecord, parse_corpus};
 pub use register::{ParsedUnknown, Resolution, parse_register};

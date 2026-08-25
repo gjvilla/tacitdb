@@ -1600,6 +1600,64 @@ It is now written down as a test rather than as a belief.
 
 ---
 
+## D-0037 · A question is agreed against a corpus, and the corpus moves
+
+```yaml
+id: D-0037
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: measurement round — resolves U-27
+evidence: [docs/GOLDEN.md, docs/REGISTER.md]
+review_trigger: when the suite grades on a corpus the record does not describe,
+  or when a baseline needs re-recording for a reason other than drift
+```
+
+**Assertion.** Every golden question records the words of it that the corpus did
+not contain when the question was agreed. If one of those words later appears in
+the corpus, the suite turns red. Together with the phrase check from D-0029 —
+which catches a record quoting a question — that covers both ways a
+self-describing corpus moves its own measurement.
+
+**Absence is the stable thing to record.** Document frequency drifts with corpus
+size, and so does reach, so a baseline of either would cry wolf on every new
+record. Whether a word is in the corpus at all does not move unless somebody
+writes it. That makes the alarm quiet when nothing happened and loud when
+something did, which is the only arrangement anyone keeps reading.
+
+**D-0029 said this could not be mechanised, and that was half right.** Checking
+the *state* of the corpus is hopeless: a rule flagging rare question words found
+in other records fires thirteen times here, and most are a corpus legitimately
+holding the topic it is about. Checking the *change* is precise, because a word
+arriving is an event with a date and a cause. The two are not the same problem
+and only one of them was intractable.
+
+**It fires on innocent records too, and that is correct.** A word can enter the
+corpus because someone wrote carelessly about a failing question, or because the
+project genuinely decided something about that subject. Both mean the same thing
+for the suite: a question chosen because the record was silent on a topic is not
+the same question once the record speaks. Re-read it, then re-record the
+baseline.
+
+**The baseline doubles as an explanation.** Reading it says why each abstention
+question abstains — the corpus has no words for it — which was previously
+something you could only discover by running a diagnostic.
+
+**And the suite document now has two tables of the same shape.** A malformed
+question row is a hard error by design, so a second table of `| G-` rows would
+have broken the suite it exists to protect. Both parsers are section-aware now;
+there is a test that neither reads the other's rows.
+
+**What this does not do.** It does not stop the corpus contaminating itself, and
+nothing in the engine can — the structural answer is a corpus the record does not
+describe, which was built for U-9 and which the suite still does not use, because
+synthetic prose cannot grade real language. That trade stands where it was. What
+changes is that the contamination is now caught the same day rather than three
+times in one.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

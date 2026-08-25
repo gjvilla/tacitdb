@@ -83,3 +83,42 @@ check that no record was written *about* it.
 | G-12 | what is the maximum supported cluster size | abstain | Greg Villa | never — this is outside the record by design |
 | G-13 | how many concurrent writers does the store support | answer D-0015 (pending U-23) | Greg Villa | when more than one process may write one store |
 | G-14 | what colour is the logo | abstain | Greg Villa | never — this is outside the record by design |
+
+## Vocabulary baseline
+
+Recorded when each question was agreed: the words of the question that the
+corpus did not contain at all. Absence is the stable thing to record — document
+frequency and reach both drift as the corpus grows, so a baseline of either
+would cry wolf on every new record, while whether a word is present does not
+move unless somebody writes it.
+
+If one of these words later appears in the corpus, the question has stopped
+measuring what it was agreed to measure, and the suite turns red so it gets
+re-read rather than quietly re-scored. That has happened three times (U-27), and
+once it made the score *better*, which is the direction nobody investigates.
+
+Regenerate with `GOLDEN_BASELINE=1 cargo run -p tacit-keeper --example golden`.
+
+| id | words the corpus did not contain |
+|----|----------------------------------|
+| G-01 | — |
+| G-02 | — |
+| G-03 | — |
+| G-04 | — |
+| G-05 | — |
+| G-06 | — |
+| G-07 | — |
+| G-08 | adopting conclude versus |
+| G-09 | — |
+| G-10 | licence |
+| G-15 | — |
+| G-16 | — |
+| G-17 | — |
+| G-18 | — |
+| G-19 | — |
+| G-20 | — |
+| G-21 | — |
+| G-11 | geographic region sharding |
+| G-12 | cluster supported |
+| G-13 | concurrent support writer |
+| G-14 | colour logo |

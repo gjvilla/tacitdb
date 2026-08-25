@@ -50,6 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  QUOTED: {id} appears in {where_} as a run of {run} words");
     }
 
+
     let retriever = index
         .retriever(&ledger, &projection, ViewSpec::now())
         .with_vectors(&vectors, &embedder as &dyn Embedder);
