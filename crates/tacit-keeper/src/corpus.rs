@@ -58,7 +58,7 @@ use std::path::{Path, PathBuf};
 use tacit_core::{
     Author, AuthorKind, ClaimContent, ClaimState, Content, Draft, EntityId, Evidence, GapContent, GapState,
     HypothesisContent, HypothesisState, Ledger, RecordId, RecordState, ReviewTrigger, SourceRef,
-    VerdictAction, VerdictContent, WithdrawReason,
+    SetBasis, VerdictAction, VerdictContent, WithdrawReason,
 };
 
 /// The two documents this ingester reads, named once so provenance and lookup
@@ -618,11 +618,16 @@ pub fn ingest_text_with(
                 if matches!(attestation, Attestation::None { .. }) {
                     report.unattested.push(record.id.clone());
                 }
+                // One editorial act, one verdict. A person wrote `state:
+                // promoted` once; the keeper split the record into a claim and
+                // a title because the model wanted them apart, and charging
+                // that split back to the author as two declarations was the
+                // transcription cost U-20 recorded (D-0034).
+                let mut promoting: Vec<RecordId> = Vec::new();
+                let mut retires: Vec<RecordId> = Vec::new();
                 for target in targets.into_iter().flatten() {
                     // On a sync most targets are already promoted by an earlier
-                    // run's transcription of the same line. Re-declaring a
-                    // verdict the ledger already holds is not idempotence, it
-                    // is a second act by a person who performed one.
+                    // run's transcription of the same line.
                     match ledger.state_of(target) {
                         Some(RecordState::Claim(ClaimState::Proposed)) => {}
                         Some(RecordState::Claim(ClaimState::Promoted)) => continue,
@@ -632,32 +637,40 @@ pub fn ingest_text_with(
                         }
                         None => continue,
                     }
-                    // A changed record is promoted and its predecessor retired
-                    // in one verdict — one editorial act, one transition pair
-                    // (design/001 §3.1).
-                    let retires = retiring.get(&target).copied().filter(|prior| {
+                    if let Some(prior) = retiring.get(&target).copied().filter(|prior| {
                         ledger.state_of(*prior) == Some(RecordState::Claim(ClaimState::Promoted))
-                    });
+                    }) {
+                        retires.push(prior);
+                    }
+                    promoting.push(target);
+                }
+                if !promoting.is_empty() {
+                    let replaced = !retires.is_empty();
                     let verdict = ledger.append(Draft::new(
                         author.clone(),
                         SourceRef {
                             channel: "corpus-ingest".into(),
-                            reference: Some(format!("docs/DECISIONS.md {} state:", record.id)),
+                            reference: Some(format!("{DECISIONS_DOC} {} state:", record.id)),
                         },
                         Content::Verdict(VerdictContent {
-                            action: VerdictAction::Promote { target, retiring: retires },
-                            rationale: Some(match retires {
-                                Some(_) => format!(
-                                    "transcribed from docs/DECISIONS.md: {} was edited and \
+                            action: VerdictAction::PromoteSet {
+                                targets: promoting,
+                                retiring: retires,
+                                basis: SetBasis::OneAct,
+                            },
+                            rationale: Some(if replaced {
+                                format!(
+                                    "transcribed from {DECISIONS_DOC}: {} was edited and \
                                      still carries `state: promoted`; the prior wording is \
                                      retired as superseded",
                                     record.id
-                                ),
-                                None => format!(
-                                    "transcribed from docs/DECISIONS.md: {} carries \
+                                )
+                            } else {
+                                format!(
+                                    "transcribed from {DECISIONS_DOC}: {} carries \
                                      `state: promoted`",
                                     record.id
-                                ),
+                                )
                             }),
                         }),
                     ))?;
@@ -1238,7 +1251,12 @@ mod tests {
             .clone()
             .expect("detail");
         assert!(matches!(Attestation::parse(&detail), Some(Attestation::None { .. })));
+        // Both claims — the content and the title — promoted by the one set
+        // verdict, and both still counted by an audit that reads what the
+        // verdict actually did rather than which variant it is.
         assert_eq!(crate::attest::unattested_promotions(&ledger).len(), 2);
+        assert_eq!(ledger.ratification().in_sets.values().sum::<usize>(), 2);
+        assert_eq!(ledger.ratification().individually, 0);
     }
 
     /// The whole of U-29: write access to the document was promotion authority.
@@ -1700,9 +1718,12 @@ mod tests {
         assert_eq!(report.content_claims.len(), records.len());
         assert_eq!(report.title_claims.len(), records.len());
 
-        // Two verdicts per promoted record: its content claim and its title.
+        // One verdict per promoted record, covering its content claim and its
+        // title together. It used to be two — the keeper split the record and
+        // then charged the split back to the author as a second declaration,
+        // which is the transcription cost U-20 recorded and D-0034 removed.
         let promoted = records.iter().filter(|r| r.yaml["state"] == "promoted").count();
-        assert_eq!(report.verdicts.len(), promoted * 2);
+        assert_eq!(report.verdicts.len(), promoted);
 
         // Exactly one hypothesis, and it is the registered one.
         let hypotheses = records.iter().filter(|r| r.id.starts_with('H')).count();

@@ -421,3 +421,83 @@ fn a_withdrawal_written_before_reasons_existed_loads_as_unstated() {
         .unwrap_err();
     assert!(matches!(err, crate::error::Error::UnstatedWithdrawReason), "got {err}");
 }
+
+/// A set verdict is a wire type like any other, and the footing it claimed has
+/// to survive the round trip — the record of *how* a thousand claims were
+/// ratified is the whole of what distinguishes them from a thousand read one at
+/// a time (D-0034).
+#[test]
+fn the_footing_of_a_set_verdict_survives_a_reload() {
+    use crate::content::SetBasis;
+
+    let scratch = Scratch::new("set-verdict");
+    let claims = {
+        let mut ledger = Ledger::open(scratch.path()).unwrap().ledger;
+        let subject = ledger.add_entity("process", "torque check").unwrap();
+        let claims: Vec<RecordId> = (0..5)
+            .map(|i| {
+                ledger
+                    .append(claim(subject, &format!("row {i} of the catalogue"), Author::agent("miner")))
+                    .unwrap()
+            })
+            .collect();
+        ledger
+            .append(Draft::new(
+                Author::human("Greg"),
+                SourceRef::channel("sync"),
+                Content::Verdict(crate::content::VerdictContent {
+                    action: crate::content::VerdictAction::PromoteSet {
+                        targets: claims.clone(),
+                        retiring: Vec::new(),
+                        basis: SetBasis::Ingestion,
+                    },
+                    rationale: None,
+                }),
+            ))
+            .unwrap();
+        claims
+    };
+
+    let ledger = Ledger::open(scratch.path()).expect("replays").ledger;
+    for id in &claims {
+        assert_eq!(ledger.state_of(*id), Some(RecordState::Claim(ClaimState::Promoted)));
+    }
+    let tally = ledger.ratification();
+    assert_eq!(tally.in_sets.get(&SetBasis::Ingestion).copied(), Some(5));
+    assert_eq!(tally.individually, 0);
+}
+
+/// And a forged one is refused on the way in, exactly as a single promotion is.
+#[test]
+fn an_agent_authored_set_verdict_cannot_load() {
+    use crate::content::SetBasis;
+
+    let scratch = Scratch::new("forged-set");
+    let claim_id = {
+        let mut ledger = Ledger::open(scratch.path()).unwrap().ledger;
+        let subject = ledger.add_entity("process", "p").unwrap();
+        ledger.append(claim(subject, "an unpromoted claim", Author::human("G"))).unwrap()
+    };
+    let text = scratch.text();
+    let forged = serde_json::json!({
+        "event": "record",
+        "id": RecordId::mint().to_string().replace("rec_", ""),
+        "recorded_at": Timestamp::now(),
+        "envelope_version": 1,
+        "author": {"name": "sneaky", "kind": "Agent", "detail": null},
+        "source": {"channel": "forged", "reference": null},
+        "valid_from": Timestamp::now(),
+        "content": {"Verdict": {"action": {"PromoteSet": {
+            "targets": [claim_id.to_string().replace("rec_", "")],
+            "basis": "Ingestion"
+        }}, "rationale": null}}
+    });
+    scratch.write(&format!("{text}{forged}\n"));
+
+    let error = Ledger::open(scratch.path()).expect_err("the forgery must not load");
+    assert!(
+        matches!(error, crate::error::Error::VerdictRequiresHumanAuthor),
+        "expected the grammar to reject it, got {error}"
+    );
+    let _ = SetBasis::Ingestion;
+}

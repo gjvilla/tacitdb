@@ -141,6 +141,16 @@ unable to lie about its shape. Authentication and authorization of *who* counts
 A single verdict may promote a superseding claim *and* retire the record it
 supersedes — one decision, one record, both transitions.
 
+*Amended 2026-08-24 (D-0034).* A verdict may also name a *set* of claims, and
+must then say on what footing one person speaks for all of them: an ingestion run
+they ratify without reading row by row, one editorial act the keeper split across
+several records, or a set genuinely read in full. Invariant 5 is untouched — a
+human still declares it and an agent still cannot — but the footing changes what
+the declaration *means*, and a reader weighing a promoted claim needs it. Its
+targets are enumerated rather than named by a run id, which is forced: the state
+fold is a pure function of the action, and a verdict that could not say what it
+touched without consulting the ledger would take that independence with it.
+
 *Amended 2026-08-24 (D-0023).* A question that leaves the register unresolved
 carries a reason, the way a retired claim always has: superseded, answered
 elsewhere, no longer relevant, or registered in error. Without it, "we asked it
@@ -182,7 +192,12 @@ application:
    verdict validated against a stale view would write permanent corruption
    into an append-only log, where a stale read is merely a stale read.*
 5. **Promotion and retirement verdicts must declare `author.kind = human`.**
-   The engine enforces the declaration; the keeper authenticates it.
+   The engine enforces the declaration; the keeper authenticates it. *Corollary
+   (added 2026-08-24, D-0034): a verdict over a set is still one person's
+   declaration, and records the footing it was made on. Bulk was never the
+   reason agents cannot promote — the reason is that promotion is a person's
+   act, and doing it to ten thousand records at once does not make it someone
+   else's.*
 6. **Agents propose; they never promote.** Agent authors may create proposed
    claims, registered gaps, registered hypotheses, and measurements — nothing
    agent-authored reaches `promoted` without a human verdict.

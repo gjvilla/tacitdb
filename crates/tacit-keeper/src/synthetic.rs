@@ -32,8 +32,8 @@ use crate::corpus::IngestError;
 use std::collections::BTreeMap;
 use tacit_core::{
     Author, ClaimContent, Content, Draft, EntityId, Evidence, GapContent, HypothesisContent,
-    Ledger, RecordId, RetireReason, ReviewTrigger, SourceRef, VerdictAction, VerdictContent,
-    WithdrawReason,
+    Ledger, RecordId, RetireReason, ReviewTrigger, SetBasis, SourceRef, VerdictAction,
+    VerdictContent, WithdrawReason,
 };
 
 /// How much corpus to build.
@@ -41,12 +41,15 @@ use tacit_core::{
 pub struct Shape {
     pub topics: usize,
     pub claims_per_topic: usize,
+    /// Records arriving as one mechanical catalogue sync, ratified by a single
+    /// verdict — the workload U-16 was registered for.
+    pub bulk: usize,
     pub seed: u64,
 }
 
 impl Default for Shape {
     fn default() -> Self {
-        Self { topics: 24, claims_per_topic: 8, seed: 0x7ac1_7000_0000_0001 }
+        Self { topics: 24, claims_per_topic: 8, bulk: 64, seed: 0x7ac1_7000_0000_0001 }
     }
 }
 
@@ -54,7 +57,12 @@ impl Shape {
     /// Roughly this many claim records, spread over a sensible number of topics.
     pub fn of_size(claims: usize) -> Self {
         let topics = ((claims as f64).sqrt() as usize).max(4);
-        Self { topics, claims_per_topic: (claims / topics).max(2), ..Self::default() }
+        Self {
+            topics,
+            claims_per_topic: (claims / topics).max(2),
+            bulk: claims,
+            ..Self::default()
+        }
     }
 
     pub fn with_seed(mut self, seed: u64) -> Self {
@@ -103,6 +111,10 @@ pub struct Corpus {
     /// The one claim retired for having stopped being true rather than for
     /// having been replaced, so `RetireReason` is exercised in both readings.
     pub retired_outright: Option<RecordId>,
+    /// Records that arrived as a mechanical sync and were ratified together.
+    pub bulk: usize,
+    /// Verdicts it took to ratify them. One.
+    pub bulk_verdicts: usize,
     pub records: usize,
 }
 
@@ -322,6 +334,44 @@ pub fn generate(ledger: &mut Ledger, shape: Shape) -> Result<Corpus, IngestError
         built.retired += 1;
         built.promoted -= 1;
         built.retired_outright = Some(id);
+    }
+
+    // A catalogue sync: mechanically derived rows nobody can render ten
+    // thousand verdicts for. One verdict, on the footing that the run and its
+    // source are what is being ratified — not the rows one at a time (U-16).
+    if shape.bulk > 0 {
+        let subject = ledger.add_entity("component", "catalogue-sync")?;
+        let mut targets = Vec::with_capacity(shape.bulk);
+        let vocabulary: Vec<String> = (0..6).map(|_| rng.word(3)).collect();
+        for i in 0..shape.bulk {
+            let mut draft = Draft::new(
+                miner.clone(),
+                SourceRef {
+                    channel: "catalogue".into(),
+                    reference: Some(format!("synthetic#sync/{i}")),
+                },
+                Content::Claim(ClaimContent::Text {
+                    body: prose(&mut rng, &vocabulary, &common),
+                    about: vec![subject],
+                }),
+            );
+            draft.evidence = vec![Evidence { source, span: Some(format!("row {i}")) }];
+            targets.push(ledger.append(draft)?);
+        }
+        built.records += shape.bulk;
+        ledger.append(verdict(
+            &keeper,
+            VerdictAction::PromoteSet {
+                targets,
+                retiring: Vec::new(),
+                basis: SetBasis::Ingestion,
+            },
+            "ratifying the catalogue sync of this date, not its rows one at a time",
+        ))?;
+        built.records += 1;
+        built.promoted += shape.bulk;
+        built.bulk = shape.bulk;
+        built.bulk_verdicts = 1;
     }
 
     Ok(built)

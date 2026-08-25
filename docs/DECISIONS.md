@@ -1389,6 +1389,81 @@ next time a default moves.
 
 ---
 
+## D-0034 · One verdict over many records, saying what it is worth
+
+```yaml
+id: D-0034
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: grammar round — resolves U-16 and U-20
+evidence: [design/001-data-model.md §3.1, docs/REGISTER.md]
+review_trigger: when a set needs to be named by a run rather than enumerated, or
+  when a fourth footing is wanted
+```
+
+**Assertion.** A verdict may name a set of claims, and must say on what footing
+one person speaks for all of them: an *ingestion run* they ratify without reading
+row by row, *one editorial act* the keeper split across several records, or a set
+*reviewed in full*. It promotes every target and may retire what those targets
+replace, in one declaration.
+
+**Invariant 5 is untouched, and that is the point.** A human still declares it
+and an agent still cannot — there is a test. Bulk was never the reason agents may
+not promote; the reason is that promotion is a person's act, and doing it to ten
+thousand records at once does not make it someone else's. What bulk changes is
+what the declaration *means*, so the meaning is written down instead of being
+left to whoever remembers the afternoon.
+
+**The footing is the whole design.** "I ratify this run and its source" and "I
+read each of these" are both honest and they are not the same, and a corpus that
+cannot tell you the mix cannot tell you what it is worth. `Ledger::ratification`
+reports it: how many claims were promoted one at a time, and how many in sets on
+each footing.
+
+**Enumerated, not named by a run.** A verdict that identified its set by an
+ingestion id would be smaller and would need the ledger to say what it touched —
+and the state fold is a pure function of the action precisely so that it cannot
+be argued with. The same constraint decided the shape of D-0023, which is twice
+now that this property has chosen an interface. The record is larger and says
+exactly what it did.
+
+**All or nothing.** One illegal target refuses the whole verdict. A
+partly-applied set verdict would be a record of something nobody declared.
+
+**U-20 was the small version of the same thing.** The ingest needed two verdicts
+per record — a claim and its title — for what an author performed once by writing
+`state: promoted`. The keeper split the record because the model wanted the parts
+apart, and then charged the split back to the author as a second declaration. It
+is one verdict now, on the footing of one act, and the corpus holds thirty-three
+verdicts where it held sixty-six.
+
+**Measured at the size it was registered for.** A generated catalogue sync of two
+thousand rows is ratified by one verdict rather than two thousand, and the tally
+reports two thousand claims promoted on the footing of an ingestion run beside
+the fifteen hundred read one at a time.
+
+**And it says something uncomfortable about this corpus straight away.** Every
+promoted claim here now reports the footing *one editorial act* and none reports
+having been read one at a time — because every one of them was transcribed from a
+document, and none has ever been ratified inside the ledger by a person looking
+at that record. That was equally true yesterday and the ledger could not say it:
+sixty-six verdicts looked like sixty-six declarations and were thirty-three acts.
+The number did not get worse, the record got honest, which is the entire reason
+the footing exists.
+
+**And adding it made two audits go quietly blind.** `unattested_promotions` and
+the trust review both asked "is this a `Promote` naming my claim?", which a set
+verdict is not — so every bulk-ratified claim would have reported as having
+nothing wrong with it. Both now ask the action what it *did*, through a
+`promotes` derived from `effects`, so a verdict added later is covered the day it
+is added. An audit that reports nothing wrong because it stopped looking is the
+worst failure this record has a word for, and the compiler cannot catch it: the
+matches were exhaustive over the enum and wrong about the question.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

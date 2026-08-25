@@ -125,6 +125,15 @@ fn describe_action(action: &tacit_core::VerdictAction) -> String {
             Some(old) => format!("promote {target} (retiring {old})"),
             None => format!("promote {target}"),
         },
+        A::PromoteSet { targets, retiring, basis } => format!(
+            "promote {} claim(s) on the basis of {basis}{}",
+            targets.len(),
+            if retiring.is_empty() {
+                String::new()
+            } else {
+                format!(", retiring {}", retiring.len())
+            }
+        ),
         A::Retire { target, reason } => format!("retire {target} ({reason:?})"),
         A::Reject { target } => format!("reject {target}"),
         A::Answer { gap, with_claim } => format!("answer {gap} with {with_claim}"),

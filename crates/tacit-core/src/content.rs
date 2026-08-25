@@ -181,6 +181,40 @@ impl fmt::Display for WithdrawReason {
     }
 }
 
+/// On what footing one person speaks for a whole set of records.
+///
+/// A set verdict does not weaken invariant 5 — a human still declares it, and
+/// an agent still cannot. What it changes is what the declaration *means*, and
+/// that difference has to be in the record rather than in someone's memory of
+/// the afternoon. "I read each of these" and "I ratify the run that produced
+/// them" are both honest, and a reader weighing a promoted claim needs to know
+/// which one it rests on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SetBasis {
+    /// Produced mechanically from one source by one run. The person ratifies
+    /// the run and its source, not the records one at a time — which is the
+    /// only honest thing to say about ten thousand rows of a catalogue.
+    Ingestion,
+    /// One editorial act that the keeper had to split across several records:
+    /// a claim and its title, a claim and the cross-references read out of it.
+    /// The person performed one act and the record should say one.
+    OneAct,
+    /// Read in full, record by record. The strong reading, available when it
+    /// is true — and worth distinguishing precisely because the other two are
+    /// weaker.
+    ReviewedInFull,
+}
+
+impl fmt::Display for SetBasis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            SetBasis::Ingestion => "an ingestion run",
+            SetBasis::OneAct => "one editorial act",
+            SetBasis::ReviewedInFull => "reviewed in full",
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VerdictAction {
     /// One verdict may promote a superseding claim and retire the record it
@@ -188,6 +222,22 @@ pub enum VerdictAction {
     Promote {
         target: RecordId,
         retiring: Option<RecordId>,
+    },
+    /// One verdict over many claims, on a stated footing.
+    ///
+    /// The targets are enumerated rather than named by a run identifier, and
+    /// that is forced rather than chosen: [`VerdictAction::effects`] is a pure
+    /// function of the action, so a verdict that could not say what it touched
+    /// without consulting the ledger would take the state fold's independence
+    /// with it. The record is larger and says exactly what it did.
+    PromoteSet {
+        targets: Vec<RecordId>,
+        /// Claims these replace, retired by the same verdict. Which replaces
+        /// which is recorded by each record's own `supersedes` link, where
+        /// supersession lives (D-0023).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        retiring: Vec<RecordId>,
+        basis: SetBasis,
     },
     Retire {
         target: RecordId,
@@ -238,6 +288,13 @@ impl VerdictAction {
                 }
                 effects
             }
+            VerdictAction::PromoteSet { targets, retiring, .. } => targets
+                .iter()
+                .map(|id| (*id, RecordState::Claim(ClaimState::Promoted)))
+                .chain(
+                    retiring.iter().map(|id| (*id, RecordState::Claim(ClaimState::Retired))),
+                )
+                .collect(),
             VerdictAction::Retire { target, .. } => {
                 vec![(*target, RecordState::Claim(ClaimState::Retired))]
             }
@@ -262,6 +319,20 @@ impl VerdictAction {
         }
     }
 
+    /// Whether this verdict is what put `id` into the promoted set.
+    ///
+    /// Derived from `effects()` rather than matched on the variants, so a
+    /// verdict added later is covered the day it is added. Adding
+    /// `PromoteSet` made two audits go quietly blind — both asked "is this a
+    /// `Promote` naming my claim?" and a set verdict is not — and an audit that
+    /// reports nothing wrong because it stopped looking is the worst failure
+    /// this record has a word for.
+    pub fn promotes(&self, id: RecordId) -> bool {
+        self.effects()
+            .iter()
+            .any(|(target, state)| *target == id && *state == RecordState::Claim(ClaimState::Promoted))
+    }
+
     /// The records whose state this action changes. Derived from `effects()`
     /// so the two cannot drift apart.
     pub(crate) fn touched(&self) -> Vec<RecordId> {
@@ -271,6 +342,7 @@ impl VerdictAction {
     pub(crate) fn name(&self) -> &'static str {
         match self {
             VerdictAction::Promote { .. } => "promote",
+            VerdictAction::PromoteSet { .. } => "promote a set",
             VerdictAction::Retire { .. } => "retire",
             VerdictAction::Reject { .. } => "reject",
             VerdictAction::Answer { .. } => "answer",

@@ -41,6 +41,12 @@ pub enum Error {
     #[error("a promotion cannot retire its own target")]
     PromoteRetireSameRecord,
 
+    #[error("a set verdict must name at least one record")]
+    EmptyVerdictSet,
+
+    #[error("{0} is named twice by the same verdict")]
+    DuplicateVerdictTarget(RecordId),
+
     #[error(
         "a withdrawal must state its reason; \"unstated\" is what a log written \
          before reasons existed reads as, not an account a verdict may give"

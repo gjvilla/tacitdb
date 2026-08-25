@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 use std::process::Command;
-use tacit_core::{ClaimState, Content, Ledger, RecordId, RecordState, VerdictAction};
+use tacit_core::{ClaimState, Content, Ledger, RecordId, RecordState};
 
 /// What could be established about the edit that put a record's current text in
 /// its document.
@@ -345,7 +345,7 @@ pub fn unattested_promotions(ledger: &Ledger) -> Vec<(RecordId, String)> {
     for claim in ledger.promoted_claims() {
         for verdict in ledger.history(claim.id()) {
             let Content::Verdict(v) = verdict.content() else { continue };
-            if !matches!(&v.action, VerdictAction::Promote { target, .. } if *target == claim.id()) {
+            if !v.action.promotes(claim.id()) {
                 continue;
             }
             // The verdict that promoted it is the one that matters; a later
@@ -438,7 +438,7 @@ pub fn review_trust(ledger: &Ledger, repo_root: &Path) -> TrustReview {
     for claim in ledger.promoted_claims() {
         for verdict in ledger.history(claim.id()) {
             let Content::Verdict(v) = verdict.content() else { continue };
-            if !matches!(&v.action, VerdictAction::Promote { target, .. } if *target == claim.id()) {
+            if !v.action.promotes(claim.id()) {
                 continue;
             }
             let Some(recorded) = verdict

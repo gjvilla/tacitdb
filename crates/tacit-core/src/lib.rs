@@ -29,7 +29,7 @@ mod validity;
 mod value;
 
 pub use content::{
-    ClaimContent, Content, GapContent, HypothesisContent, RecordKind, RetireReason, ScoreOutcome,
+    ClaimContent, Content, GapContent, HypothesisContent, RecordKind, RetireReason, ScoreOutcome, SetBasis,
     VerdictAction, VerdictContent, WithdrawReason,
 };
 pub use embedding::{
@@ -42,7 +42,9 @@ pub use envelope::{
 pub use error::Error;
 pub use id::{EntityId, IdParseError, RecordId};
 pub use journal::{Event, Recovery};
-pub use ledger::{Contradiction, Ledger, Opened, Pending, ReviewQueue, SOURCE_KIND};
+pub use ledger::{
+    Contradiction, Ledger, Opened, Pending, Ratification, ReviewQueue, SOURCE_KIND,
+};
 pub use measurement::{Measurement, MeasurementTarget};
 pub use projection::{
     CostSpec, CostTransform, Edge, GraphView, MissingCost, Node, Path, Projection, Property,

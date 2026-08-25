@@ -69,6 +69,28 @@ pub struct Opened {
     pub recovery: Recovery,
 }
 
+/// How the promoted set got there: one at a time, or in sets and on what
+/// footing.
+///
+/// The number a keeper actually wants when asked how much of a corpus anyone
+/// has really looked at. A set verdict is a human verdict — invariant 5 is
+/// untouched — but "I ratify this run" and "I read each of these" are different
+/// declarations, and a corpus that cannot tell you the mix cannot tell you how
+/// much it is worth.
+#[derive(Debug, Default)]
+pub struct Ratification {
+    /// Promoted by a verdict naming them alone.
+    pub individually: usize,
+    /// Promoted by a set verdict, counted by the footing it claimed.
+    pub in_sets: BTreeMap<crate::content::SetBasis, usize>,
+}
+
+impl Ratification {
+    pub fn total(&self) -> usize {
+        self.individually + self.in_sets.values().sum::<usize>()
+    }
+}
+
 /// The keeper's inbox, and what was folded out of it.
 ///
 /// Both lists are present rather than one being filtered away silently: a
@@ -528,6 +550,36 @@ impl Ledger {
                 }
                 Ok(())
             }
+            VerdictAction::PromoteSet { targets, retiring, .. } => {
+                if targets.is_empty() {
+                    return Err(Error::EmptyVerdictSet);
+                }
+                // A record named twice, or named on both sides, is a verdict
+                // whose author cannot have meant what it says.
+                let mut seen: std::collections::BTreeSet<RecordId> = Default::default();
+                for id in targets.iter().chain(retiring) {
+                    if !seen.insert(*id) {
+                        return Err(Error::DuplicateVerdictTarget(*id));
+                    }
+                }
+                for target in targets {
+                    expect_kind(*target, RecordKind::Claim)?;
+                    expect_state(
+                        *target,
+                        RecordState::Claim(ClaimState::Proposed),
+                        self.state_of(*target).expect("target exists"),
+                    )?;
+                }
+                for id in retiring {
+                    expect_kind(*id, RecordKind::Claim)?;
+                    expect_state(
+                        *id,
+                        RecordState::Claim(ClaimState::Promoted),
+                        self.state_of(*id).expect("retiring exists"),
+                    )?;
+                }
+                Ok(())
+            }
             VerdictAction::Retire { target, .. } => {
                 expect_kind(*target, RecordKind::Claim)?;
                 expect_state(
@@ -701,6 +753,27 @@ impl Ledger {
         Pending { queued, superseded }
     }
 
+    /// How each promoted claim reached promoted: alone, or as part of a set and
+    /// on what footing (D-0034).
+    pub fn ratification(&self) -> Ratification {
+        let mut tally = Ratification::default();
+        for claim in self.promoted_claims() {
+            for verdict in self.history(claim.id()) {
+                let Content::Verdict(v) = verdict.content() else { continue };
+                if !v.action.promotes(claim.id()) {
+                    continue;
+                }
+                match &v.action {
+                    VerdictAction::PromoteSet { basis, .. } => {
+                        *tally.in_sets.entry(*basis).or_default() += 1;
+                    }
+                    _ => tally.individually += 1,
+                }
+            }
+        }
+        tally
+    }
+
     /// Registered gaps — the honest boundary of the record.
     pub fn registered_gaps(&self) -> Vec<&Record> {
         self.records()
@@ -832,7 +905,7 @@ impl Ledger {
 mod tests {
     use super::*;
     use crate::content::{
-        GapContent, HypothesisContent, RetireReason, ScoreOutcome, VerdictContent,
+        GapContent, HypothesisContent, RetireReason, ScoreOutcome, SetBasis, VerdictContent,
     };
     use crate::envelope::{Evidence, ReviewTrigger, SourceRef};
     use crate::value::Value;
@@ -1201,6 +1274,160 @@ mod tests {
             .append_at(attribute_claim(subject, Author::human("Greg")), future)
             .unwrap_err();
         assert!(matches!(err, Error::FutureRecordTime { .. }));
+    }
+
+    // ── U-16: one verdict over many records ─────────────────────────────────
+
+    #[test]
+    fn one_verdict_can_ratify_many_claims_and_says_on_what_footing() {
+        let (mut ledger, _, subject) = setup();
+        let claims: Vec<RecordId> = (0..50)
+            .map(|_| ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap())
+            .collect();
+
+        ledger
+            .append(verdict(
+                VerdictAction::PromoteSet {
+                    targets: claims.clone(),
+                    retiring: Vec::new(),
+                    basis: SetBasis::Ingestion,
+                },
+                Author::human("Greg"),
+            ))
+            .unwrap();
+
+        for id in &claims {
+            assert_eq!(ledger.state_of(*id), Some(RecordState::Claim(ClaimState::Promoted)));
+        }
+        // Fifty claims, one declaration — and the record says which declaration
+        // it was, because "I ratify this run" and "I read each of these" are
+        // different things to have said.
+        let tally = ledger.ratification();
+        assert_eq!(tally.individually, 0);
+        assert_eq!(tally.in_sets.get(&SetBasis::Ingestion).copied(), Some(50));
+        assert_eq!(tally.total(), 50);
+    }
+
+    #[test]
+    fn a_set_verdict_is_still_a_human_verdict() {
+        let (mut ledger, _, subject) = setup();
+        let claim = ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap();
+        // Invariant 6 is untouched. Bulk was never the reason agents could not
+        // promote; the reason was that promotion is a person's act, and doing
+        // it to a thousand records at once does not make it someone else's.
+        let err = ledger
+            .append(verdict(
+                VerdictAction::PromoteSet {
+                    targets: vec![claim],
+                    retiring: Vec::new(),
+                    basis: SetBasis::Ingestion,
+                },
+                Author::agent("miner"),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, Error::VerdictRequiresHumanAuthor));
+        assert_eq!(ledger.state_of(claim), Some(RecordState::Claim(ClaimState::Proposed)));
+    }
+
+    #[test]
+    fn a_set_verdict_is_all_or_nothing() {
+        let (mut ledger, _, subject) = setup();
+        let good = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+        let already = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+        ledger.append(promote(already)).unwrap();
+
+        // One illegal target and the whole verdict is refused. A partly-applied
+        // set verdict would be a record of something nobody declared.
+        let err = ledger
+            .append(verdict(
+                VerdictAction::PromoteSet {
+                    targets: vec![good, already],
+                    retiring: Vec::new(),
+                    basis: SetBasis::ReviewedInFull,
+                },
+                Author::human("Greg"),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, Error::IllegalTransition { .. }), "got {err}");
+        assert_eq!(ledger.state_of(good), Some(RecordState::Claim(ClaimState::Proposed)));
+    }
+
+    #[test]
+    fn a_set_verdict_must_name_something_and_name_it_once() {
+        let (mut ledger, _, subject) = setup();
+        let claim = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+
+        let empty = ledger
+            .append(verdict(
+                VerdictAction::PromoteSet {
+                    targets: Vec::new(),
+                    retiring: Vec::new(),
+                    basis: SetBasis::OneAct,
+                },
+                Author::human("Greg"),
+            ))
+            .unwrap_err();
+        assert!(matches!(empty, Error::EmptyVerdictSet));
+
+        let twice = ledger
+            .append(verdict(
+                VerdictAction::PromoteSet {
+                    targets: vec![claim, claim],
+                    retiring: Vec::new(),
+                    basis: SetBasis::OneAct,
+                },
+                Author::human("Greg"),
+            ))
+            .unwrap_err();
+        assert!(matches!(twice, Error::DuplicateVerdictTarget(_)));
+
+        // And a record cannot be promoted and retired by one breath.
+        let promoted = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+        ledger.append(promote(promoted)).unwrap();
+        let both = ledger
+            .append(verdict(
+                VerdictAction::PromoteSet {
+                    targets: vec![promoted],
+                    retiring: vec![promoted],
+                    basis: SetBasis::OneAct,
+                },
+                Author::human("Greg"),
+            ))
+            .unwrap_err();
+        assert!(matches!(both, Error::DuplicateVerdictTarget(_)), "got {both}");
+    }
+
+    #[test]
+    fn a_set_verdict_promotes_replacements_and_retires_what_they_replace() {
+        let (mut ledger, _, subject) = setup();
+        let old_a = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+        let old_b = ledger.append(attribute_claim(subject, Author::human("Greg"))).unwrap();
+        ledger.append(promote(old_a)).unwrap();
+        ledger.append(promote(old_b)).unwrap();
+
+        let mut new_a = attribute_claim(subject, Author::human("Greg"));
+        new_a.supersedes = Some(old_a);
+        let new_a = ledger.append(new_a).unwrap();
+        let mut new_b = attribute_claim(subject, Author::human("Greg"));
+        new_b.supersedes = Some(old_b);
+        let new_b = ledger.append(new_b).unwrap();
+
+        ledger
+            .append(verdict(
+                VerdictAction::PromoteSet {
+                    targets: vec![new_a, new_b],
+                    retiring: vec![old_a, old_b],
+                    basis: SetBasis::OneAct,
+                },
+                Author::human("Greg"),
+            ))
+            .unwrap();
+
+        // Which replaced which is not recorded here and does not need to be:
+        // each record's own `supersedes` link says so, where supersession lives.
+        assert_eq!(ledger.state_of(new_a), Some(RecordState::Claim(ClaimState::Promoted)));
+        assert_eq!(ledger.state_of(old_b), Some(RecordState::Claim(ClaimState::Retired)));
+        assert_eq!(ledger.record(new_b).unwrap().envelope().supersedes(), Some(old_b));
     }
 
     // ── U-28: withdrawing a question, and saying which kind ─────────────────

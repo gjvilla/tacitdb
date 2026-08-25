@@ -67,6 +67,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("  contradictions     {} planted", corpus.contradictions.len());
     println!("  supersessions      {}", corpus.supersessions.len());
+    let ratified = ledger.ratification();
+    println!(
+        "  ratified           {} one at a time, {} in sets",
+        ratified.individually,
+        ratified.in_sets.values().sum::<usize>()
+    );
+    for (basis, count) in &ratified.in_sets {
+        println!("    {count:>6} on the basis of {basis}");
+    }
+    println!(
+        "  ^ {} of those took {} verdict(s). Per-record ratification would have taken {} (U-16)",
+        corpus.bulk, corpus.bulk_verdicts, corpus.bulk
+    );
 
     rule("WHAT IT COST TO BUILD");
     let per = built.as_secs_f64() * 1e6 / ledger.log().len() as f64;

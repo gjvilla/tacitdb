@@ -353,6 +353,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = ledger.review_queue(jiff::Timestamp::now());
     println!("  due for review        {}", queue.due.len());
     println!("  promoted, no trigger  {}", queue.missing_trigger.len());
+    let ratified = ledger.ratification();
+    println!(
+        "  promoted, one at a time {}   in sets {}",
+        ratified.individually,
+        ratified.in_sets.values().sum::<usize>()
+    );
+    for (basis, count) in &ratified.in_sets {
+        println!("    {count:>3} on the footing of {basis} (D-0034)");
+    }
     let pending = ledger.pending_proposals();
     println!("  awaiting a verdict    {}", pending.queued.len());
     if !pending.superseded.is_empty() {
