@@ -146,7 +146,25 @@ fn main() -> ExitCode {
         println!("  record of what was once true.");
     }
 
-    if card.regressions().is_empty() && stale.is_empty() {
+    // A corpus that describes its own retrieval failures will quote the
+    // questions that fail, and then rank for them. Caught here because the
+    // manual check U-27 asked for demonstrably does not happen: two of these
+    // were written in a single commit, and one moved a question's reach from
+    // 0.52 to 1.00.
+    let quoted = tacit_keeper::quoted_questions(&questions, &ledger);
+    if !quoted.is_empty() {
+        println!("\n\x1b[1mQUESTIONS THE CORPUS QUOTES BACK\x1b[0m");
+        println!("{}", "─".repeat(64));
+        for (id, where_, run) in &quoted {
+            println!("  {id}  quoted in {where_}, {run} words in a row");
+        }
+        println!();
+        println!("  Name a golden question by its id in the corpus, never by its wording.");
+        println!("  A record that repeats the question ranks for it, and then the record");
+        println!("  explaining a failure outranks the record that would answer it (U-27).");
+    }
+
+    if card.regressions().is_empty() && stale.is_empty() && quoted.is_empty() {
         println!();
         ExitCode::SUCCESS
     } else {
@@ -155,6 +173,9 @@ fn main() -> ExitCode {
         }
         if !stale.is_empty() {
             println!("  {} question(s) resting on a trigger that has fired.", stale.len());
+        }
+        if !quoted.is_empty() {
+            println!("  {} question(s) quoted back by the corpus.", quoted.len());
         }
         println!();
         ExitCode::FAILURE

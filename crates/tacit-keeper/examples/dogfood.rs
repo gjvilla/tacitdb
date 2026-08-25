@@ -407,9 +407,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Scored honestly: (a) durable, re-validated, and current, with the document");
     println!("  deliberately upstream and U-29 the price of that; (b) capability met;");
     println!("  (c) instrument exists and reports honestly.");
-    println!("  Retrieval quality (U-23) is the open work, not the grading — and as of");
-    println!("  D-0028 it is smaller than it looked: three of the four faults measured");
-    println!("  were lexical and are fixed. What is left needs a model that sees meaning.");
+    println!("  Retrieval quality (U-23) is the open work, not the grading — and it is");
+    println!("  smaller than it looked. Of five faults measured, four were lexical and");
+    println!("  are fixed (D-0028, D-0029); what is left needs a model that sees meaning.");
+    println!("  The suite now also audits itself: a question whose review trigger has");
+    println!("  fired, or whose wording the corpus quotes back, turns it red.");
 
     println!();
     Ok(())

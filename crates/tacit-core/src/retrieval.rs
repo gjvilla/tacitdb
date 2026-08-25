@@ -425,6 +425,10 @@ pub struct Retrieved<'a> {
     /// cannot tell a shallow answer from an unanswerable question.
     pub coverage: f64,
     pub known: f64,
+    /// Query terms the index read as a near neighbour, as (asked, read as).
+    /// Published because a search that quietly answers a different question
+    /// than the one typed is worse than one that finds nothing.
+    pub read_as: Vec<(String, String)>,
 }
 
 impl Retrieved<'_> {
@@ -480,6 +484,47 @@ const DF_PRUNE_FRACTION: f64 = 0.5;
 const DF_PRUNE_MIN_DOCS: usize = 10;
 /// Gaps surface at this fraction of the match coverage bar.
 const GAP_COVERAGE_RATIO: f64 = 0.5;
+/// Shortest word this index will read as a misspelling of another. Below it,
+/// one edit is the difference between too many unrelated words.
+const NEIGHBOUR_MIN_LEN: usize = 5;
+
+/// Whether two words differ by at most one edit — one substitution, or one
+/// letter inserted or removed. Exact for a distance of one and cheaper than a
+/// general edit distance, which is all this needs to decide.
+fn within_one_edit(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    // The edit must be inside the word, never at its end. An edit at the end is
+    // a suffix, and a suffix is morphology — `writer` and `write` are related
+    // and are not the same word, so reading one as the other pulls in records
+    // about writing for a question about writers. Measured: that substitution
+    // was the only false neighbour the suite produced, and it cost the question
+    // its answer. An edit inside the word is a spelling: licence/license,
+    // colour/color, organise/organize all keep their last letter.
+    if a.last() != b.last() {
+        return false;
+    }
+    match a.len().abs_diff(b.len()) {
+        0 => a.iter().zip(&b).filter(|(x, y)| x != y).count() == 1,
+        1 => {
+            // Walk together; allow the longer word exactly one skip.
+            let (long, short) = if a.len() > b.len() { (&a, &b) } else { (&b, &a) };
+            let (mut i, mut j, mut skipped) = (0, 0, false);
+            while i < long.len() && j < short.len() {
+                if long[i] == short[j] {
+                    i += 1;
+                    j += 1;
+                } else if skipped {
+                    return false;
+                } else {
+                    skipped = true;
+                    i += 1;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
 
 /// One ranker's candidates, best first.
 pub type Ranking = Vec<(RecordId, f64)>;
@@ -494,6 +539,11 @@ pub type Ranking = Vec<(RecordId, f64)>;
 #[derive(Debug, Default)]
 struct Candidates {
     ranked: Vec<(RecordId, f64)>,
+    /// Query terms the index held no posting for and read as a near neighbour,
+    /// as (asked, read as). Carried out so the substitution is visible: a
+    /// search that silently answers a different question than the one typed is
+    /// worse than one that finds nothing.
+    read_as: Vec<(String, String)>,
     matched_idf: BTreeMap<RecordId, f64>,
     /// Weight of every discriminating query term, present or not — the
     /// denominator coverage is measured against.
@@ -660,7 +710,43 @@ impl<'a> Retriever<'a> {
         let items = self.apply_budget(items, query.budget);
         let truncated = total - items.len();
 
-        Retrieved { outcome, items, gaps: self.gaps_for(query), truncated, coverage, known }
+        Retrieved {
+            outcome,
+            items,
+            gaps: self.gaps_for(query),
+            truncated,
+            coverage,
+            known,
+            read_as: candidates.read_as.clone(),
+        }
+    }
+
+    /// The one index term within a single edit of a term the index does not
+    /// have, when there is exactly one.
+    ///
+    /// A corpus written in one spelling and questioned in another loses its
+    /// most discriminating word to a single letter — `licence` reaching nothing
+    /// because the record says `license` (U-33). Three guards keep this from
+    /// becoming a guess: it runs *only* for a term with no postings at all, so
+    /// a word the corpus really has is never overridden; the words must be long
+    /// enough that one edit is not most of them; and two candidates mean the
+    /// index does not know which was meant, so it answers neither.
+    fn nearest_term(&self, term: &str) -> Option<String> {
+        if term.len() < NEIGHBOUR_MIN_LEN {
+            return None;
+        }
+        let mut found: Option<&String> = None;
+        for candidate in self.index.postings.keys() {
+            if candidate.len() < NEIGHBOUR_MIN_LEN || !within_one_edit(term, candidate) {
+                continue;
+            }
+            if found.is_some() {
+                // Ambiguous. Refusing beats picking the alphabetically first.
+                return None;
+            }
+            found = Some(candidate);
+        }
+        found.cloned()
     }
 
     /// The two candidate rankings as they stand before fusion: lexical first,
@@ -715,8 +801,19 @@ impl<'a> Retriever<'a> {
         let mut matched_idf: BTreeMap<RecordId, f64> = BTreeMap::new();
         let mut total_idf = 0.0;
         let mut missing_idf = 0.0;
+        let mut read_as: Vec<(String, String)> = Vec::new();
         for term in &discriminating {
-            let Some(postings) = self.index.postings.get(*term) else {
+            // A term the index does not have may be a spelling of one it does.
+            // Tried only here, at the point the term would otherwise contribute
+            // nothing at all.
+            let postings = match self.index.postings.get(*term) {
+                Some(postings) => Some(postings),
+                None => self.nearest_term(term).and_then(|near| {
+                    read_as.push(((*term).clone(), near.clone()));
+                    self.index.postings.get(&near)
+                }),
+            };
+            let Some(postings) = postings else {
                 // Never written about: weigh it as a `df = 0` term would be,
                 // and count it separately as well.
                 //
@@ -724,10 +821,10 @@ impl<'a> Retriever<'a> {
                 // rather than assumed. Taking it out is defensible — no record
                 // can cover a word the corpus lacks — and it recovers one
                 // underconfident answer. It also inflates coverage whenever
-                // what remains is generic, and it turned "what licence will the
-                // engine ship under" from a weak miss into a confident wrong
-                // answer. Across the suite the two cases sit at coverage
-                // 0.77/0.60 with reach 0.63/0.64: no threshold separates them,
+                // what remains is generic, and it turned G-10 from a weak miss
+                // into a confident wrong answer. Across the suite the two cases
+                // sit at coverage 0.77/0.60 with reach 0.63/0.64: no threshold
+                // separates them,
                 // so the relaxation buys one answer and costs one abstention.
                 // A bluff is the worse failure, so it is not taken (U-23).
                 let weight = ((n + 0.5) / 0.5 + 1.0).ln();
@@ -763,7 +860,7 @@ impl<'a> Retriever<'a> {
         ranked.sort_by(|a, b| {
             b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
         });
-        Candidates { ranked, matched_idf, total_idf, missing_idf }
+        Candidates { ranked, read_as, matched_idf, total_idf, missing_idf }
     }
 
     fn log_order(&self, id: RecordId) -> usize {
@@ -1075,6 +1172,81 @@ mod tests {
         // It only has to be consistent, not linguistic: the index folds by the
         // same rule the query does, so `doe` matching `doe` is a match.
         assert_eq!(tokenize("does"), tokenize("doe"));
+    }
+
+    #[test]
+    fn one_letter_inside_a_word_is_a_spelling_and_one_at_the_end_is_not() {
+        // The pairs this exists for.
+        assert!(within_one_edit("licence", "license"));
+        assert!(within_one_edit("colour", "color"));
+        assert!(within_one_edit("organise", "organize"));
+        assert!(within_one_edit("behaviour", "behavior"));
+
+        // A suffix is morphology, not spelling: `writer` and `write` are
+        // related and are not the same word. This was the only false neighbour
+        // the golden suite produced, and it cost a question its answer.
+        assert!(!within_one_edit("writer", "write"));
+        assert!(!within_one_edit("promote", "promoted"));
+        assert!(!within_one_edit("store", "stores"));
+
+        // Two edits are a different word.
+        assert!(!within_one_edit("licence", "licensed"));
+        assert!(!within_one_edit("ledger", "ledgers"));
+    }
+
+    #[test]
+    fn a_word_the_corpus_spells_differently_is_still_reached() {
+        let mut f = fixture();
+        let claim = f
+            .ledger
+            .append(prose(f.torque, "the analyser records every organisation", Author::human("Maria")))
+            .unwrap();
+        f.ledger.append(promote(claim)).unwrap();
+        let ledger = f.ledger;
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+
+        // Asked in the other dialect. The record says `analyser`; the question
+        // says `analyzer`, and one letter should not cost the whole term.
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("analyzer"),
+        );
+        assert_eq!(found.items.len(), 1);
+        assert_eq!(found.items[0].record.id(), claim);
+        // Said out loud: a search that quietly answers a different question
+        // than the one typed is worse than one that finds nothing.
+        assert_eq!(found.read_as, vec![("analyzer".to_string(), "analyser".to_string())]);
+        assert_eq!(found.known, 1.0);
+    }
+
+    #[test]
+    fn a_word_the_corpus_has_is_never_read_as_another() {
+        let mut f = fixture();
+        let claim = f
+            .ledger
+            .append(prose(f.torque, "the analyser sits by the stone and the store", Author::human("Maria")))
+            .unwrap();
+        f.ledger.append(promote(claim)).unwrap();
+        let ledger = f.ledger;
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+
+        // Present, so nothing is substituted for it. A word the corpus really
+        // has is never overridden by a neighbour.
+        let exact =
+            retrieve(&index, &ledger, &projection, ViewSpec::now(), &Query::text("analyser"));
+        assert!(exact.read_as.is_empty());
+
+        // `stole` sits one interior edit from both `stone` and `store`. The
+        // index does not know which was meant, so it answers neither — refusing
+        // beats picking the alphabetically first.
+        let ambiguous =
+            retrieve(&index, &ledger, &projection, ViewSpec::now(), &Query::text("stole"));
+        assert!(ambiguous.read_as.is_empty(), "got {:?}", ambiguous.read_as);
     }
 
     #[test]
@@ -1476,8 +1648,15 @@ mod vector_tests {
         (ledger, subject)
     }
 
-    /// What the second ranker actually buys: a record whose wording differs
-    /// from the question by spelling, which a token index cannot bridge.
+    /// What the second ranker actually buys, restated after U-33 took half of
+    /// it away.
+    ///
+    /// This once used `licence` against a record saying `license`, and the
+    /// token index really could not bridge it. It can now, and better — a
+    /// lexical bridge counts toward coverage, where a close vector is only ever
+    /// an offer. What is left to the vector ranker is what the spelling rule
+    /// deliberately refuses: a suffix, where the words are related and are not
+    /// the same word.
     #[test]
     fn vectors_reach_what_the_token_index_cannot() {
         let (ledger, _) = fixture();
@@ -1485,12 +1664,12 @@ mod vector_tests {
         let index = TextIndex::rebuild(&ledger);
         let embedder = HashingEmbedder::default();
         let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
-        let query = Query::text("licence");
+        let query = Query::text("licensed");
 
         let lexical = index
             .retriever(&ledger, &projection, ViewSpec::now())
             .retrieve(&query);
-        assert!(lexical.items.is_empty(), "no token matches 'licence' exactly");
+        assert!(lexical.items.is_empty(), "no token reaches 'licensed'");
 
         let hybrid = index
             .retriever(&ledger, &projection, ViewSpec::now())
@@ -1514,7 +1693,7 @@ mod vector_tests {
         let found = index
             .retriever(&ledger, &projection, ViewSpec::now())
             .with_vectors(&vectors, &embedder)
-            .retrieve(&Query::text("licence"));
+            .retrieve(&Query::text("licensed"));
         assert_eq!(found.outcome, Outcome::WeakMatches);
         assert!(found.is_abstention(), "a close vector is an offer, not an answer");
     }

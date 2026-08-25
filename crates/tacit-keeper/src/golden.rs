@@ -12,6 +12,7 @@
 //! them into one number tells you nothing about what to fix.
 
 use crate::parse::ParseError;
+use std::collections::BTreeSet;
 use tacit_core::{
     Content, Embedder, Ledger, Outcome, Projection, Query, Retrieved, TextIndex, VectorIndex,
     ViewSpec,
@@ -268,6 +269,56 @@ pub fn stale_triggers(
             Some((question.id.clone(), format!("{fired} is resolved: \"{}\"", question.review_trigger)))
         })
         .collect()
+}
+
+/// Golden questions whose wording has leaked into the corpus, with the record
+/// that quotes them and how long the quoted run is.
+///
+/// A corpus that describes its own retrieval failures will quote the questions
+/// that fail, and then rank for them — so the record explaining why a question
+/// cannot be answered outranks the record that answers it. Not fixable in the
+/// engine: it is a curation discipline, and a discipline nobody checks is a
+/// wish (U-27).
+pub fn quoted_questions(
+    questions: &[GoldenQuestion],
+    ledger: &Ledger,
+) -> Vec<(String, String, usize)> {
+    let mut found = Vec::new();
+    for question in questions {
+        let asked = tacit_core::tokenize(&question.question);
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for record in ledger.records() {
+            let Some(text) = tacit_core::indexable_text(record) else { continue };
+            let run = longest_shared_run(&asked, &tacit_core::tokenize(&text));
+            // Every offender, not the worst one: two records each quoting the
+            // same question is two records ranking for it.
+            if run >= QUOTE_RUN && seen.insert(anchor_of(ledger, record)) {
+                found.push((question.id.clone(), anchor_of(ledger, record), run));
+            }
+        }
+    }
+    found
+}
+
+/// How many of a question's words in a row a record may repeat before it starts
+/// ranking for the question rather than for its subject. Five is a phrase.
+const QUOTE_RUN: usize = 5;
+
+fn longest_shared_run(asked: &[String], text: &[String]) -> usize {
+    let mut best = 0;
+    for start in 0..text.len() {
+        for (from, _) in asked.iter().enumerate() {
+            let mut run = 0;
+            while from + run < asked.len()
+                && start + run < text.len()
+                && asked[from + run] == text[start + run]
+            {
+                run += 1;
+            }
+            best = best.max(run);
+        }
+    }
+    best
 }
 
 pub fn run_with(

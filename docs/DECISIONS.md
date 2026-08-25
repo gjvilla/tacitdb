@@ -1070,9 +1070,8 @@ question sits at or below 0.32 and every answerable one at or above 0.52.
 
 **And the relaxation that came with it was measured and refused.** Dropping
 unmatchable terms from the coverage denominator recovers one underconfident
-answer and turns "what licence will the engine ship under" into a confident
-wrong one. The two sit at coverage 0.77 and 0.60 with reach 0.63 and 0.64: no
-threshold separates them. A bluff is the worse failure, so the denominator keeps
+answer and turns G-10 into a confident wrong one. The two sit at coverage 0.77
+and 0.60 with reach 0.63 and 0.64: no threshold separates them. A bluff is the worse failure, so the denominator keeps
 its missing terms and reach is only ever an extra reason to decline.
 
 **The suite had gone stale in exactly the way it warns about.** Four questions
@@ -1089,11 +1088,76 @@ against expectations the record outgrew now fail against correct ones. The score
 did not move because the system got better and the test got harder at the same
 time, and saying "no change" would describe neither.
 
-**What is left needs meaning, and now only that.** Three shortfalls remain where
-the record answers the question in words the question does not use: `store` for
-"storage", "one process owns a store at a time" for "how many concurrent
-writers". No lexical repair reaches those. The `Embedder` trait is still how a
-model arrives, and the ground under it is now measured rather than assumed.
+**What is left needs meaning, and now only that.** Three shortfalls remain —
+G-08, G-09, G-13 — where the record answers in words the asking does not use. No
+lexical repair reaches those. The `Embedder` trait is still how a model arrives,
+and the ground under it is now measured rather than assumed.
+
+*Amended 2026-08-24 (D-0029).* This record originally illustrated those three by
+restating what they ask. Doing so put their rarest words into the corpus, which
+moved the very measurements above: one question's reach went from 0.52 to 1.00
+because this paragraph existed. Golden questions are named by id here now, and
+the suite checks for the rest.
+
+---
+
+## D-0029 · One letter inside a word is a spelling; one at the end is not
+
+```yaml
+id: D-0029
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: retrieval round — resolves U-33
+evidence: [docs/GOLDEN.md, docs/REGISTER.md]
+review_trigger: when a second dialect or a second language writes into the
+  corpus, or when the term scan becomes measurable
+```
+
+**Assertion.** A query term the index holds no posting for may be read as an
+index term one edit away, when the edit falls inside the word and both words are
+at least five letters. The substitution is published on the result, never
+silent. Two candidates mean the index does not know which was meant, so it
+answers neither.
+
+**Forces.** A corpus written in one dialect and questioned in another loses its
+most discriminating word to a single letter, and the word it loses is the one
+the whole question turns on. Folding plurals (D-0028) does not reach it:
+`organise` and `organize` are the same word and differ in the middle.
+
+**The edit must be inside the word, and that rule was measured.** An edit at the
+end is a suffix, and a suffix is morphology — the words are related and are not
+the same word. Without the rule the suite produced exactly one false neighbour,
+reading a question about people who do a thing as a question about the thing,
+and it cost that question the answer it had already found. With it, one
+substitution occurs across twenty-one questions and it is the right one.
+
+**Only for a term that reaches nothing.** A word the corpus really has is never
+overridden. That guard is what keeps this from being a guess: it can only ever
+turn zero into something, never turn one answer into another.
+
+**It took half of what the vector ranker was for.** D-0020 justified vectors
+partly as the thing that bridges a spelling, and the test demonstrating it used
+exactly this case. A lexical bridge is strictly better there, because it counts
+toward coverage while a close vector is only ever an offer. What is left to the
+vector ranker is what this rule refuses — suffixes and wider differences — and
+on this corpus it currently earns nothing the suite can measure. Worth saying
+plainly rather than leaving the seat looking occupied.
+
+**Golden questions are named by id in this corpus, never by their wording.** A
+record that repeats a question ranks for it, so the record explaining why a
+question fails outranks the record that would answer it. This is not a
+hypothetical: two such quotes went into the corpus in a single commit, and one
+of them moved a question's reach from 0.52 to 1.00 — the corpus answering a
+question with the note about why it could not. Illustrations here use words the
+suite does not, for the same reason.
+
+**And the suite now audits itself twice over.** It fails the build when a
+question quotes back, and when a question rests on a review trigger that has
+already fired. Both were meant to be manual checks and both were demonstrably
+not happening — four fired triggers and two quotes accumulated without anyone
+noticing. A discipline nobody checks is a wish.
 
 ---
 

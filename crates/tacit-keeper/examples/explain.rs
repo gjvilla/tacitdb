@@ -46,6 +46,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     println!("corpus: {docs} indexed records");
+    for (id, where_, run) in tacit_keeper::quoted_questions(&questions, &ledger) {
+        println!("  QUOTED: {id} appears in {where_} as a run of {run} words");
+    }
 
     let retriever = index
         .retriever(&ledger, &projection, ViewSpec::now())
@@ -68,6 +71,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             question.id, found.outcome, found.coverage, found.known
         );
         println!("  q: {}", question.question);
+        if !found.read_as.is_empty() {
+            println!(
+                "  read as: {}",
+                found
+                    .read_as
+                    .iter()
+                    .map(|(asked, near)| format!("{asked}->{near}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
         println!(
             "  fused:   {}",
             found
