@@ -127,6 +127,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hybrid_each.as_secs_f64() / lexical_each.as_secs_f64().max(f64::MIN_POSITIVE)
     );
 
+    rule("WHERE A HYBRID QUERY'S TIME GOES");
+    // The register assumed the per-candidate admission dominated. Assumptions
+    // about where time goes are exactly what this corpus exists to replace.
+    let view = projection.view(&ledger, ViewSpec::now());
+    let ids: Vec<_> = vectors.iter().map(|(id, _)| *id).collect();
+    let t = Instant::now();
+    let admitted = ids.iter().filter(|id| view.admits_record(**id)).count();
+    let admitting = t.elapsed();
+    let probe = embedder.embed(&sample[0].question());
+    let t = Instant::now();
+    let mut sum = 0.0f32;
+    for (_, embedded) in vectors.iter() {
+        sum += tacit_core::similarity(&probe, &embedded.vector);
+    }
+    let arithmetic = t.elapsed();
+    let q = Query::text(sample[0].question());
+    let t = Instant::now();
+    let (lex, vec) = hybrid.candidates(&q);
+    let candidates = t.elapsed();
+    let t = Instant::now();
+    let fused = tacit_core::fuse(&[lex.clone(), vec.clone()], &Default::default());
+    let fusing = t.elapsed();
+    let t = Instant::now();
+    let whole = hybrid.retrieve(&q);
+    let retrieving = t.elapsed();
+    println!("  both candidate lists      {:>8.2?}  ({} lexical, {} vector)", candidates, lex.len(), vec.len());
+    println!("  fusing them               {:>8.2?}  ({} fused)", fusing, fused.len());
+    println!("  the whole retrieve        {:>8.2?}  ({} returned)", retrieving, whole.items.len());
+    println!("  admitting {} candidates {:>8.2?}", ids.len(), admitting);
+    println!("  the similarity itself     {:>8.2?}  (checksum {sum:.1})", arithmetic);
+    println!(
+        "  {admitted} admitted; admission is {:.0}x the arithmetic",
+        admitting.as_secs_f64() / arithmetic.as_secs_f64().max(f64::MIN_POSITIVE)
+    );
+
     rule("THE INSTRUMENT PANEL");
     let t = Instant::now();
     let found = ledger.contradictions();

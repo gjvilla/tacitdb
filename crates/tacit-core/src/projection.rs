@@ -478,7 +478,10 @@ impl<'a> GraphView<'a> {
     /// Whether this view admits a record, whatever its kind. The single
     /// admission predicate: retrieval and the projected graph must never
     /// disagree about what a view contains.
-    pub(crate) fn admits_record(&self, id: RecordId) -> bool {
+    /// Whether this view admits a record, whatever its kind. Public because
+    /// it is the question a caller holding a view actually has, and because a
+    /// cost nobody can time is a cost nobody can argue about.
+    pub fn admits_record(&self, id: RecordId) -> bool {
         let Some(record) = self.ledger.record(id) else { return false };
         let slot = Slot::of(record, 0);
         match record.content() {

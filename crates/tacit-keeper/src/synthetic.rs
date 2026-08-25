@@ -492,6 +492,36 @@ mod tests {
     }
 
     #[test]
+    fn the_gap_channel_still_offers_after_sharing_the_answer_path_s_candidates() {
+        let (ledger, corpus) = built();
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let retriever = index.retriever(&ledger, &projection, ViewSpec::now());
+
+        // Every open question is worded from its own topic, so asking that
+        // topic's question must reach it. The answer path and the gap path now
+        // share one set of candidates (D-0031); this is what would break if
+        // they ever stopped agreeing about what the query found.
+        let mut offered = 0;
+        for topic in &corpus.topics {
+            let found = retriever.retrieve(&Query::text(topic.question()));
+            if found.gaps.iter().any(|g| corpus.gaps_open.contains(&g.id())) {
+                offered += 1;
+            }
+            // And a question is never returned as one of the answers to itself.
+            assert!(
+                found.items.iter().all(|i| !matches!(
+                    i.record.content(),
+                    tacit_core::Content::Gap(_)
+                )),
+                "a gap took an answer slot for {}",
+                topic.label
+            );
+        }
+        assert!(offered > 0, "open questions are offered for their own topics");
+    }
+
+    #[test]
     fn the_same_seed_builds_the_same_corpus() {
         let mut a = Ledger::new();
         let mut b = Ledger::new();

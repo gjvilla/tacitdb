@@ -202,7 +202,9 @@ impl VectorIndex {
         self.vectors.is_empty()
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&crate::id::RecordId, &Embedded)> {
+    /// Every vector in the index. Public so the cost of scanning them can be
+    /// timed from outside rather than argued about.
+    pub fn iter(&self) -> impl Iterator<Item = (&crate::id::RecordId, &Embedded)> {
         self.vectors.iter()
     }
 }

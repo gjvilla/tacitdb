@@ -713,7 +713,7 @@ impl<'a> Retriever<'a> {
         Retrieved {
             outcome,
             items,
-            gaps: self.gaps_for(query),
+            gaps: self.gaps_for(query, &candidates, &vector),
             truncated,
             coverage,
             known,
@@ -943,7 +943,20 @@ impl<'a> Retriever<'a> {
     /// by matching the gap's own text. Gaps are indexed like every other
     /// record, which is what makes this a retrieval outcome rather than an
     /// application heuristic.
-    fn gaps_for(&self, query: &Query) -> Vec<&'a Record> {
+    /// The open questions this query meets.
+    ///
+    /// Takes the candidates the answer path already computed rather than
+    /// computing them again. It used to recompute both — and since it cleared
+    /// the entity scope, and this branch is only reached when there is no
+    /// scope, the second pass was byte-for-byte the first. At sixty-eight
+    /// thousand records that duplicate ran a full vector scan to offer at most
+    /// a handful of questions, and cost as much as answering did (D-0031).
+    fn gaps_for(
+        &self,
+        query: &Query,
+        candidates: &Candidates,
+        vector: &[(RecordId, f64)],
+    ) -> Vec<&'a Record> {
         let scope: BTreeSet<EntityId> = query.entity_scope.iter().copied().collect();
         let mut gaps: Vec<&'a Record> = Vec::new();
 
@@ -963,9 +976,6 @@ impl<'a> Retriever<'a> {
 
         // Unscoped: a gap is offered when the question genuinely overlaps it,
         // judged by the same coverage rule that decides a confident match.
-        let mut scoped = query.clone();
-        scoped.entity_scope.clear();
-        let candidates = self.lexical_candidates(&scoped);
         if candidates.total_idf <= 0.0 {
             return gaps;
         }
@@ -979,8 +989,7 @@ impl<'a> Retriever<'a> {
         // word, which is the wrong instinct when choosing which open question
         // to raise.
         let gap_coverage = query.min_coverage * GAP_COVERAGE_RATIO;
-        let closeness: BTreeMap<RecordId, f64> =
-            self.vector_candidates(&scoped).into_iter().collect();
+        let closeness: BTreeMap<RecordId, f64> = vector.iter().copied().collect();
         let mut scored: Vec<(f64, &'a Record)> = Vec::new();
         let ids: BTreeSet<RecordId> = candidates
             .ranked
@@ -1055,11 +1064,20 @@ pub fn fuse(rankings: &[Vec<(RecordId, f64)>], fusion: &Fusion) -> Vec<(RecordId
         }
     }
 
-    let mut fused: Vec<(RecordId, f64)> = totals.into_iter().collect();
-    fused.sort_by(|a, b| {
-        b.1.total_cmp(&a.1).then_with(|| first_rank[&a.0].cmp(&first_rank[&b.0]))
-    });
-    fused
+    // The tie-break travels with the row rather than being looked up from
+    // inside the comparator. Two map lookups per comparison is a map walked
+    // `n log n` times, which is invisible at fifty candidates and most of a
+    // query at twenty-five thousand — the same lesson `log_order` taught one
+    // layer down (D-0031).
+    let mut fused: Vec<(RecordId, f64, usize)> = totals
+        .into_iter()
+        .map(|(id, score)| {
+            let rank = first_rank.get(&id).copied().unwrap_or(usize::MAX);
+            (id, score, rank)
+        })
+        .collect();
+    fused.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+    fused.into_iter().map(|(id, score, _)| (id, score)).collect()
 }
 
 #[cfg(test)]

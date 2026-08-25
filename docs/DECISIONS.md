@@ -1223,6 +1223,62 @@ returns its own topic's record first, at both sizes and with either plan.
 
 ---
 
+## D-0031 · The cost was not where the register said it was
+
+```yaml
+id: D-0031
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: scale round — resolves U-35
+evidence: [docs/REGISTER.md, docs/DECISIONS.md]
+review_trigger: when an approximate index lands (U-26), or when a query plan
+  gains a third ranker
+```
+
+**Assertion.** U-35 said retrieval's cost was the per-candidate admission fold.
+Timing it says otherwise: admission is 5.2ms and the similarity arithmetic 4.9ms
+of what was a 42ms query — a quarter between them. The cost was that the gap
+channel recomputed both candidate lists from scratch, so every query ran the
+vector scan twice, and offering a handful of open questions cost as much as
+answering the question did.
+
+**And the duplicate was unconditional.** The gap path cleared the query's entity
+scope before recomputing — and the branch that recomputed is only reached when
+there is no entity scope, so the second pass was byte-for-byte the first, every
+time, for as long as the code has existed. Sharing what the answer path already
+computed took a query at 68,000 records from 42ms to 29ms with no change in what
+it returns.
+
+**U-35 was written by reading the code, and reading was wrong.** That is the
+third guess this week that measurement refuted — after the fusion constant that
+changed nothing and the model that turned out to be three-quarters lexical. The
+pattern is consistent enough to state as a rule: a performance claim in this
+register is a hypothesis until something times it, and it should be worded like
+one.
+
+**A second fault fixed for correctness rather than speed.** Fusion looked its
+tie-break up from a map inside the sort comparator — the same shape as the log
+scan D-0030 found one layer down. It measures as no change, because exact ties
+between floating-point fusion scores are rare, and it is still a comparator
+walking a map `n log n` times. Fixed because it is wrong, not because it was
+slow.
+
+**What remains, and whose job it is.** The pipeline still materialises 25,762
+candidates to return ten. Capping the fusion depth would cut that further and
+would be an approximation — a candidate outside the top of both rankings can no
+longer win. An approximate index returns the top directly and subsumes the cap
+entirely, which is U-26 and already registered. Doing the cap here would
+pre-empt a registered design decision with a quiet approximation, so it is not
+done here.
+
+**Where a hybrid query stands.** 1.2ms at a thousand claims, 6.6ms at eight
+thousand, 29ms at sixty-eight thousand records — still 125 times the lexical
+half, and the vector scan is still the thing that does not scale.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
