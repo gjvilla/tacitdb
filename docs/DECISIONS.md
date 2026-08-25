@@ -1464,6 +1464,72 @@ matches were exhaustive over the enum and wrong about the question.
 
 ---
 
+## D-0035 · Who the commits say made this is part of the boundary
+
+```yaml
+id: D-0035
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: boundary round — sharpens U-7
+evidence: [docs/DISCLOSURE.md, docs/REGISTER.md]
+review_trigger: when U-7 resolves, or when a second person commits to this
+  repository
+```
+
+**Assertion.** D-0010's boundary covers the record of who made this work, not
+only the text of it. `scripts/check-boundary.sh` now reads the commit identity
+as well as the files: it fails on the identity the *next* commit would carry, and
+reports what history already carries without failing on it.
+
+**It had been watching the wrong thing, and the finding is the point.** Every one
+of the first twenty commits is authored, committed and cryptographically signed
+under an employer email address. The boundary script passed on all of them,
+because it had only ever been asked about file contents. A project whose founding
+record says *personal project, personal time* has been asserting the opposite in
+its own metadata since the first commit, and the check written to catch exactly
+this class of thing did not look there.
+
+**History is not rewritten, and that is a decision rather than an oversight.**
+Restamping twenty commits with a different name would be tidying evidence in a
+matter where ownership is the open question — whatever else it would be. It would
+also contradict the append-only ethic the engine is built on, which would be a
+poor advertisement for it. The identities stand; what changes is what the next
+commit says.
+
+**So the check fails on what is still changeable and reports what is not.** That
+split is the whole design: an alarm on the fixable thing, a note on the fact. The
+repository is red until an identity is set for it, and being red is correct — the
+boundary is genuinely violated and has been all along.
+
+**The signing key carries it too, and is being left alone.** The GPG key these
+commits are signed with has a UID bearing the same address, so every attestation
+D-0026 records names that identity as the signer. Noted rather than changed:
+generating or switching keys, or stopping signing, would each alter the record in
+a way worth thinking about before doing, and none of it is the engine's business.
+
+**A red check is the gate, not a nuisance.** This one is expected to stay red
+until U-7 resolves, which risks becoming the alarm nobody reads that this very
+script was written to avoid. The framing is what saves it: U-7 already blocks
+publishing, so a check that fails on U-7 is the release gate made mechanical
+rather than remembered — the same move that stopped the golden suite's review
+triggers rotting unnoticed. It says so when it fires, and says not to silence it.
+
+**A second fact, recorded without a conclusion.** Nineteen of twenty commits fall
+between 13:00 and 19:00 on a Monday, one on a Sunday afternoon. What that means
+depends on working arrangements that are not in this repository and are not the
+engine's to judge. It is written down because a record that only kept the
+convenient facts would not be worth keeping.
+
+**And a page to hand someone.** [DISCLOSURE.md](DISCLOSURE.md) states what this
+project is, what it contains, what it does not, how that is enforced, and both
+of the facts above — for the conversation U-7 has been asking for since the
+founding interview. It makes no legal claim, because none of this is mine to
+make.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
