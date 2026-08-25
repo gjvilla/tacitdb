@@ -127,6 +127,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hybrid_each.as_secs_f64() / lexical_each.as_secs_f64().max(f64::MIN_POSITIVE)
     );
 
+    rule("IS THIS SPACE APPROXIMABLE AT ALL?");
+    // Any nearest-neighbour shortcut rests on near pairs being much nearer than
+    // far ones. If the best match is barely ahead of the median, there is no
+    // neighbourhood to find and no index can find it.
+    for topic in sample.iter().take(3) {
+        let (_, exact) = hybrid.candidates(&Query::text(topic.question()));
+        if exact.len() < 20 {
+            continue;
+        }
+        let best = exact[0].1;
+        let tenth = exact[9].1;
+        let median = exact[exact.len() / 2].1;
+        let worst = exact[exact.len() - 1].1;
+        println!(
+            "  {}  best {best:.3}  10th {tenth:.3}  median {median:.3}  worst {worst:.3}  (best is {:.1}% above median)",
+            topic.label,
+            (best / median - 1.0) * 100.0
+        );
+    }
+
+    rule("APPROXIMATE VECTORS, AGAINST THE EXACT ANSWER");
+    // Measured on the vector ranking itself, not on the fused result. Fusion
+    // mixes in the lexical ranker, so end-to-end agreement moves for reasons
+    // that have nothing to do with the approximation — it went *down* as the
+    // probe widened, which is a fact about RRF and not about recall.
+    for (want, max_buckets) in [(200usize, 64usize), (1000, 256), (4000, 1024)] {
+        let probe = tacit_core::Probe::Neighbourhoods { want, max_buckets };
+        let (mut top1, mut overlap, mut expected, mut scanned) = (0usize, 0usize, 0usize, 0usize);
+        let mut elapsed = std::time::Duration::ZERO;
+        for topic in &sample {
+            let q = Query::text(topic.question());
+            let (_, exact) = hybrid.candidates(&q);
+            let t = Instant::now();
+            let (_, approx) = hybrid.candidates(&Query { probe, ..q.clone() });
+            elapsed += t.elapsed();
+            let found = hybrid.retrieve(&Query { probe, ..q });
+            scanned += found.scanned;
+
+            let want_ids: Vec<_> = exact.iter().take(10).map(|(id, _)| *id).collect();
+            expected += want_ids.len();
+            overlap += approx.iter().take(10).filter(|(id, _)| want_ids.contains(id)).count();
+            if exact.first().map(|(id, _)| *id) == approx.first().map(|(id, _)| *id) {
+                top1 += 1;
+            }
+        }
+        println!(
+            "  want {want:<5} scanned {:>6}/{}  same best {top1}/{}  recall@10 {overlap}/{expected}  {:.2?}/query",
+            scanned / sample.len(),
+            vectors.len(),
+            sample.len(),
+            elapsed / sample.len() as u32
+        );
+    }
+
     rule("WHERE A HYBRID QUERY'S TIME GOES");
     // The register assumed the per-candidate admission dominated. Assumptions
     // about where time goes are exactly what this corpus exists to replace.

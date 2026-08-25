@@ -1279,6 +1279,69 @@ half, and the vector scan is still the thing that does not scale.
 
 ---
 
+## D-0032 · An approximate index, built and measured and left switched off
+
+```yaml
+id: D-0032
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: scale round — narrows U-26
+evidence: [docs/REGISTER.md, docs/REQUIREMENTS.md]
+review_trigger: when a model with a wider similarity range is plugged in, when
+  the corpus passes a million vectors, or when a better index beats the numbers
+  below
+```
+
+**Assertion.** The vector index now carries neighbourhoods — eight independent
+divisions of the space by random hyperplanes, twelve bits each — and a query can
+walk the ring around its own signature instead of reading everything. Exact
+scanning remains the default. What was read is published on every result.
+
+**The choice of method was made by an invariant, not by a benchmark.** A
+signature depends on its own vector and nothing else, so folding a record in
+later lands it in exactly the bucket a rebuild would, and `rebuild ==
+empty().advance()` stays definitional (D-0016). A navigable graph whose edges
+depend on insertion order, or cells whose centroids move as data arrives, would
+both have cost that — and the property test that holds it down now covers the
+vector index too.
+
+**It is predicate-aware, which was the requirement and not a detail.** The index
+yields candidates and judges nothing; the caller holds the view and stops when it
+has enough records that view *admits*. So a filtered search narrows the
+traversal rather than discarding its results afterwards, which is R-1 and the
+production gap that started this project.
+
+**And it does not earn the default. Measured, on 35,480 vectors:** at its best
+setting it reads 17% of the index and returns 65% of the exact top ten, agreeing
+on the single best match sixteen times in twenty. That is roughly two and a half
+times faster for a third of the recall. Widening the probe walks up a curve that
+flattens: eight tables and twenty-four measure the same, and more scanning buys
+proportionally less each time.
+
+**The fault is the method, not the data, and that was worth establishing.** The
+space is genuinely approximable — the best match sits 115% above the median
+similarity, so there are real neighbourhoods to find. Sign-random projection
+simply needs a much larger corpus before its asymptotics beat a linear scan by
+enough to pay for what it drops. At thirty-five thousand vectors the constants
+win.
+
+**A measurement that was wrong before it was right.** Recall first appeared to
+*fall* as the probe widened, which is impossible for the approximation and was
+true of what was being measured: end-to-end agreement of the fused result, which
+mixes in the lexical ranker. Measured on the vector ranking alone it is monotone.
+Two rules met here — measure the thing you are changing, and a number that moves
+the wrong way is a fact about the instrument until proven otherwise.
+
+**So it ships off, and honestly.** `Probe::Exact` by default, `Probe::Neighbourhoods`
+for a caller who wants it, and `Retrieved::scanned` on every result so an
+approximation is something anyone can see the size of rather than infer. The
+numbers above are now the baseline a better index has to beat, which is more than
+U-26 had before: it had a shape to build and no bar to clear.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

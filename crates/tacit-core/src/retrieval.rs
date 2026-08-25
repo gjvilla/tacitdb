@@ -250,6 +250,20 @@ impl Expansion {
     }
 }
 
+/// How much of the vector index a query may skip.
+///
+/// `Exact` reads every admitted vector, which is correct and linear in the
+/// index. `Neighbourhoods` visits the signature the query hashes into and the
+/// rings around it, stopping once it has enough candidates the view admits — so
+/// a filtered search narrows the traversal rather than discarding results after
+/// it (R-1). What it read is always reported as `Retrieved::scanned`, because
+/// an approximation nobody can see the size of is one nobody can judge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    Exact,
+    Neighbourhoods { want: usize, max_buckets: usize },
+}
+
 /// How several candidate rankings combine. Reciprocal rank fusion is the
 /// default because it needs no score calibration between rankers — which
 /// matters the moment a vector ranker joins a lexical one.
@@ -304,6 +318,8 @@ pub struct Query {
     /// How many open questions to offer at most. An abstention that lists
     /// every gap in the register has not helped anyone.
     pub gap_budget: usize,
+    /// How much of the vector index this query may skip.
+    pub probe: Probe,
     /// Cosine similarity at or above which a vector-close record is worth
     /// offering as a possibly-relevant open question. Deliberately *not* used
     /// to confer confidence on an answer — see the note in `retrieve`.
@@ -321,6 +337,7 @@ impl Query {
             min_score: 0.0,
             min_coverage: 0.5,
             min_known: 0.5,
+            probe: Probe::Exact,
             stopwords: DEFAULT_STOPWORDS.iter().map(|s| s.to_string()).collect(),
             gap_budget: 3,
             min_similarity: 0.5,
@@ -429,6 +446,10 @@ pub struct Retrieved<'a> {
     /// Published because a search that quietly answers a different question
     /// than the one typed is worse than one that finds nothing.
     pub read_as: Vec<(String, String)>,
+    /// Vectors examined. Equal to the index size under `Probe::Exact` and much
+    /// smaller under `Probe::Neighbourhoods` — published so an approximation is
+    /// something a caller can see the size of rather than infer.
+    pub scanned: usize,
 }
 
 impl Retrieved<'_> {
@@ -599,42 +620,81 @@ impl<'a> Retriever<'a> {
     /// Cosine similarity against every record the view admits, checked before
     /// scoring rather than after (R-1). Exact rather than approximate: at this
     /// scale an exact scan is correct and fast, and an ANN structure is U-26.
-    fn vector_candidates(&self, query: &Query) -> Vec<(RecordId, f64)> {
-        let Some((index, embedder)) = self.vectors else { return Vec::new() };
+    fn vector_candidates(&self, query: &Query) -> (Vec<(RecordId, f64)>, usize) {
+        let Some((index, embedder)) = self.vectors else { return (Vec::new(), 0) };
         let probe = embedder.embed(&query.text);
         if probe.iter().all(|v| *v == 0.0) {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let scope: BTreeSet<EntityId> = query.entity_scope.iter().copied().collect();
 
-        let mut ranked: Vec<(RecordId, f64)> = index
-            .iter()
-            .filter(|(id, _)| {
-                if !scope.is_empty() {
-                    let in_scope = self
-                        .index
-                        .docs
-                        .get(*id)
-                        .is_some_and(|d| d.entities.iter().any(|e| scope.contains(e)));
-                    if !in_scope {
-                        return false;
+        let admits = |id: RecordId| -> bool {
+            if !scope.is_empty()
+                && !self
+                    .index
+                    .docs
+                    .get(&id)
+                    .is_some_and(|d| d.entities.iter().any(|e| scope.contains(e)))
+            {
+                return false;
+            }
+            self.view.admits_record(id)
+        };
+
+        let mut scanned = 0usize;
+        let mut ranked: Vec<(RecordId, f64)> = Vec::new();
+        match query.probe {
+            Probe::Exact => {
+                for (id, embedded) in index.iter() {
+                    scanned += 1;
+                    if !admits(*id) {
+                        continue;
+                    }
+                    let score = f64::from(similarity(&probe, &embedded.vector));
+                    if score > 0.0 {
+                        ranked.push((*id, score));
                     }
                 }
-                self.view.admits_record(**id)
-            })
-            .map(|(id, embedded)| (*id, f64::from(similarity(&probe, &embedded.vector))))
-            .filter(|(_, score)| *score > 0.0)
-            .collect();
+            }
+            Probe::Neighbourhoods { want, max_buckets } => {
+                let mut buckets = 0usize;
+                // Tables overlap by design, so a record can be reached more
+                // than once and must only be weighed once.
+                let mut seen: BTreeSet<RecordId> = BTreeSet::new();
+                for bucket in index.neighbourhoods(&probe) {
+                    buckets += 1;
+                    for id in bucket {
+                        if !seen.insert(*id) {
+                            continue;
+                        }
+                        scanned += 1;
+                        if !admits(*id) {
+                            continue;
+                        }
+                        let Some(embedded) = index.vector(*id) else { continue };
+                        let score = f64::from(similarity(&probe, &embedded.vector));
+                        if score > 0.0 {
+                            ranked.push((*id, score));
+                        }
+                    }
+                    // Enough of what the *view* admits, not enough of what the
+                    // index holds: the stopping rule is the predicate's.
+                    if ranked.len() >= want || buckets >= max_buckets {
+                        break;
+                    }
+                }
+            }
+        }
         ranked.sort_by(|a, b| {
             b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
         });
-        ranked
+        (ranked, scanned)
     }
 
     /// One plan: candidates, filter, expansion, fusion, budget.
     pub fn retrieve(&self, query: &Query) -> Retrieved<'a> {
         let candidates = self.lexical_candidates(query);
-        let vector = self.vector_candidates(query);
+        let (vector, scanned) = self.vector_candidates(query);
         let rankings: Vec<Vec<(RecordId, f64)>> = if vector.is_empty() {
             vec![candidates.ranked.clone()]
         } else {
@@ -718,6 +778,7 @@ impl<'a> Retriever<'a> {
             coverage,
             known,
             read_as: candidates.read_as.clone(),
+            scanned,
         }
     }
 
@@ -757,7 +818,7 @@ impl<'a> Retriever<'a> {
     /// whether nothing found it at all. Those are different faults with
     /// different fixes, and without this they look identical from outside.
     pub fn candidates(&self, query: &Query) -> (Ranking, Ranking) {
-        (self.lexical_candidates(query).ranked, self.vector_candidates(query))
+        (self.lexical_candidates(query).ranked, self.vector_candidates(query).0)
     }
 
     /// BM25 over the inverted index, with the view's filter applied to each
@@ -1714,6 +1775,86 @@ mod vector_tests {
             .retrieve(&Query::text("licensed"));
         assert_eq!(found.outcome, Outcome::WeakMatches);
         assert!(found.is_abstention(), "a close vector is an offer, not an answer");
+    }
+
+    /// R-1, restated for the approximate path: the predicate narrows the
+    /// traversal rather than being applied to its results.
+    #[test]
+    fn probing_stops_on_what_the_view_admits_not_on_what_the_index_holds() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("topic", "licensing").unwrap();
+        // One admitted record among many the default view will not have.
+        let wanted = promoted_claim(&mut ledger, subject, "the engine license will be permissive");
+        for i in 0..200 {
+            ledger
+                .append(Draft::new(
+                    Author::agent("miner"),
+                    SourceRef::channel("c"),
+                    Content::Claim(ClaimContent::Text {
+                        body: format!("proposal {i} about permissive engine licensing"),
+                        about: vec![subject],
+                    }),
+                ))
+                .unwrap();
+        }
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+
+        let found = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&vectors, &embedder)
+            .retrieve(&Query {
+                probe: Probe::Neighbourhoods { want: 5, max_buckets: 4096 },
+                ..Query::text("engine license permissive")
+            });
+
+        // Everything returned is admitted — post-filtering would have handed
+        // back proposals and then thrown them away, ending with nothing.
+        assert!(found.items.iter().any(|i| i.record.id() == wanted));
+        for item in &found.items {
+            assert_eq!(
+                ledger.state_of(item.record.id()),
+                Some(crate::state::RecordState::Claim(crate::state::ClaimState::Promoted))
+            );
+        }
+        // And it kept going past the five it wanted, because the stopping rule
+        // counts what the view admits and most of this index is not that.
+        assert!(found.scanned > 5, "scanned {}", found.scanned);
+    }
+
+    #[test]
+    fn an_approximate_probe_reads_less_and_says_how_much() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("topic", "licensing").unwrap();
+        for i in 0..300 {
+            let id = promoted_claim(
+                &mut ledger,
+                subject,
+                &format!("record {i} on permissive engine licensing and distribution"),
+            );
+            let _ = id;
+        }
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+        let retriever = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&vectors, &embedder);
+
+        let exact = retriever.retrieve(&Query::text("permissive engine licensing"));
+        let approx = retriever.retrieve(&Query {
+            probe: Probe::Neighbourhoods { want: 20, max_buckets: 32 },
+            ..Query::text("permissive engine licensing")
+        });
+
+        assert_eq!(exact.scanned, vectors.len(), "exact reads all of it");
+        assert!(approx.scanned < exact.scanned, "{} vs {}", approx.scanned, exact.scanned);
+        // Published, not inferred: an approximation nobody can see the size of
+        // is one nobody can judge.
+        assert!(approx.scanned > 0);
     }
 
     #[test]

@@ -147,16 +147,56 @@ pub struct Embedded {
 
 /// Derived, rebuildable, never authoritative — the same posture as every other
 /// index here.
+/// How many hyperplanes divide the vector space. `2^BUCKET_BITS`
+/// neighbourhoods: enough that a large index thins out, few enough that
+/// probing a ring of them stays cheap.
+const BUCKET_BITS: u32 = 12;
+/// How many independent divisions of the space to keep.
+///
+/// One is not enough, and the arithmetic says why before any measurement does:
+/// two vectors at cosine 0.6 agree on a given random bit with probability
+/// `1 - arccos(0.6)/pi`, about 0.705, so they share all ten bits of a single
+/// signature only 3% of the time. A true neighbour almost never lands in the
+/// query's own bucket. Eight independent tables give it eight chances.
+const TABLES: usize = 8;
+
+/// A vector index, and the neighbourhoods that let a query avoid reading all
+/// of it.
+///
+/// Each vector carries a [`BUCKET_BITS`]-bit signature: bit *i* is the sign of
+/// its dot product with hyperplane *i*. Two vectors close in cosine agree on
+/// most bits, so a query need only look at the signature it hashes into and
+/// the ring of signatures around it (U-26).
+///
+/// Sign-random projection rather than a navigable graph, and the reason is the
+/// invariant rather than the recall: a signature depends on its own vector and
+/// nothing else, so folding a record in later produces exactly the index a
+/// rebuild would. `rebuild == empty().advance()` stays definitional (D-0016),
+/// and the property test that holds it down keeps working. A graph whose edges
+/// depend on insertion order, or cells whose centroids move as data arrives,
+/// would both have cost that.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VectorIndex {
     applied: usize,
     model_id: String,
     vectors: BTreeMap<crate::id::RecordId, Embedded>,
+    /// Per table: signature → the records carrying it, in id order.
+    buckets: Vec<BTreeMap<u64, Vec<crate::id::RecordId>>>,
+    /// Per table, its hyperplanes. Made on first use once the dimension is
+    /// known, and derived from a fixed seed, so two indexes over one model
+    /// divide the space the same way.
+    planes: Vec<Vec<Vec<f32>>>,
 }
 
 impl VectorIndex {
     pub fn empty(model_id: impl Into<String>) -> Self {
-        Self { applied: 0, model_id: model_id.into(), vectors: BTreeMap::new() }
+        Self {
+            applied: 0,
+            model_id: model_id.into(),
+            vectors: BTreeMap::new(),
+            buckets: Vec::new(),
+            planes: Vec::new(),
+        }
     }
 
     pub fn rebuild(ledger: &crate::ledger::Ledger, embedder: &dyn Embedder) -> Self {
@@ -183,8 +223,19 @@ impl VectorIndex {
             let Some(record) = ledger.record(*id) else { continue };
             let Some(text) = crate::retrieval::indexable_text(record) else { continue };
             let content_hash = HashingEmbedder::hash(&text, 0);
-            self.vectors
-                .insert(*id, Embedded { vector: embedder.embed(&text), content_hash });
+            let vector = embedder.embed(&text);
+            if self.planes.is_empty() && !vector.is_empty() {
+                self.planes = hyperplanes(vector.len());
+                self.buckets = vec![BTreeMap::new(); TABLES];
+            }
+            for table in 0..self.planes.len() {
+                let signature = self.signature(table, &vector);
+                let bucket = self.buckets[table].entry(signature).or_default();
+                if let Err(at) = bucket.binary_search(id) {
+                    bucket.insert(at, *id);
+                }
+            }
+            self.vectors.insert(*id, Embedded { vector, content_hash });
         }
         self.applied = log.len();
         self.applied - start
@@ -207,6 +258,138 @@ impl VectorIndex {
     pub fn iter(&self) -> impl Iterator<Item = (&crate::id::RecordId, &Embedded)> {
         self.vectors.iter()
     }
+
+    pub fn vector(&self, id: crate::id::RecordId) -> Option<&Embedded> {
+        self.vectors.get(&id)
+    }
+
+    /// The signature of a vector under one table's hyperplanes.
+    fn signature(&self, table: usize, vector: &[f32]) -> u64 {
+        let mut bits = 0u64;
+        for (i, plane) in self.planes[table].iter().enumerate() {
+            let dot: f32 = vector.iter().zip(plane).map(|(v, p)| v * p).sum();
+            if dot >= 0.0 {
+                bits |= 1 << i;
+            }
+        }
+        bits
+    }
+
+    /// The index's neighbourhoods for a query, closest first: the signature the
+    /// query hashes into, then every signature one bit away, then two, and so
+    /// on outward.
+    ///
+    /// Deliberately yields *candidates* and judges nothing. The caller holds
+    /// the view, so the caller filters — and because it can stop when it has
+    /// enough records its view admits, a filtered search narrows the traversal
+    /// instead of discarding its results afterwards (R-1).
+    pub fn neighbourhoods<'a>(&'a self, query: &[f32]) -> Neighbourhoods<'a> {
+        let centres = (0..self.planes.len()).map(|t| self.signature(t, query)).collect();
+        Neighbourhoods {
+            index: self,
+            centres,
+            table: 0,
+            radius: 0,
+            flips: Vec::new(),
+            done: self.planes.is_empty(),
+        }
+    }
+}
+
+/// Signatures at increasing Hamming distance from a query's own.
+pub struct Neighbourhoods<'a> {
+    index: &'a VectorIndex,
+    /// One signature per table.
+    centres: Vec<u64>,
+    /// Tables are walked at each radius before the radius widens, so the
+    /// closest neighbourhood of every division comes before the second-closest
+    /// of any of them.
+    table: usize,
+    radius: u32,
+    /// Which bits are flipped for the next signature in the current ring.
+    flips: Vec<u32>,
+    done: bool,
+}
+
+impl<'a> Iterator for Neighbourhoods<'a> {
+    type Item = &'a [crate::id::RecordId];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.done {
+                return None;
+            }
+            let table = self.table;
+            let mut signature = self.centres[table];
+            for bit in &self.flips {
+                signature ^= 1 << bit;
+            }
+            self.step();
+            if let Some(bucket) = self.index.buckets[table].get(&signature) {
+                return Some(bucket);
+            }
+        }
+    }
+}
+
+impl Neighbourhoods<'_> {
+    /// Advance to the next combination of flipped bits, widening the ring when
+    /// the current one is exhausted.
+    fn step(&mut self) {
+        let bits = BUCKET_BITS;
+        // Next table at the same ring first.
+        self.table += 1;
+        if self.table < self.centres.len() {
+            return;
+        }
+        self.table = 0;
+        // Odometer over strictly increasing bit positions.
+        let mut i = self.flips.len();
+        while i > 0 {
+            i -= 1;
+            if self.flips[i] < bits - (self.flips.len() - i) as u32 {
+                self.flips[i] += 1;
+                for j in i + 1..self.flips.len() {
+                    self.flips[j] = self.flips[j - 1] + 1;
+                }
+                return;
+            }
+        }
+        self.radius += 1;
+        if self.radius > bits {
+            self.done = true;
+            return;
+        }
+        self.flips = (0..self.radius).collect();
+    }
+}
+
+/// Hyperplanes from a fixed seed, so the same model always divides the space
+/// the same way and an index built in two sittings matches one built in one.
+fn hyperplanes(dimensions: usize) -> Vec<Vec<Vec<f32>>> {
+    let mut state = 0x5eed_1234_9abc_def1u64;
+    let mut next = move || {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    (0..TABLES)
+        .map(|_| {
+            (0..BUCKET_BITS)
+                .map(|_| {
+                    (0..dimensions)
+                        .map(|_| {
+                    // Uniform in [-1, 1): the direction is what matters, and a
+                    // cheap uniform draw separates the space as well as a
+                    // Gaussian one at this dimension.
+                            (next() >> 11) as f32 / (1u64 << 52) as f32 * 2.0 - 1.0
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -238,12 +421,15 @@ mod tests {
     #[test]
     fn spelling_variants_are_close() {
         let embedder = HashingEmbedder::default();
-        let licence = embedder.embed("what licence will the engine ship under");
-        let license = embedder.embed("engine license: Apache-2.0 versus MIT");
+        // Illustrated with a pair the golden suite does not use, per D-0029:
+        // a phrase repeated in this repository is a phrase the corpus can rank
+        // for, and source is one edit away from documentation.
+        let british = embedder.embed("the analyser recorded every organisation");
+        let american = embedder.embed("the analyzer recorded every organization");
         let unrelated = embedder.embed("weighted shortest paths over the instrument panel");
         assert!(
-            similarity(&licence, &license) > similarity(&licence, &unrelated),
-            "licence/license must beat an unrelated sentence"
+            similarity(&british, &american) > similarity(&british, &unrelated),
+            "one dialect must beat an unrelated sentence"
         );
     }
 
@@ -258,6 +444,50 @@ mod tests {
             similarity(&a, &b) < 0.3,
             "hashed n-grams cannot see meaning; a real model is a caller's to supply"
         );
+    }
+
+    #[test]
+    fn a_vector_is_in_the_neighbourhood_it_hashes_into() {
+        use crate::content::{ClaimContent, Content};
+        use crate::envelope::{Author, SourceRef};
+        use crate::record::Draft;
+
+        let mut ledger = crate::ledger::Ledger::new();
+        let subject = ledger.add_entity("topic", "t").unwrap();
+        let mut ids = Vec::new();
+        for i in 0..40 {
+            ids.push(
+                ledger
+                    .append(Draft::new(
+                        Author::human("G"),
+                        SourceRef::channel("c"),
+                        Content::Claim(ClaimContent::Text {
+                            body: format!("record {i} about fasteners and torque"),
+                            about: vec![subject],
+                        }),
+                    ))
+                    .unwrap(),
+            );
+        }
+        let embedder = HashingEmbedder::default();
+        let index = VectorIndex::rebuild(&ledger, &embedder);
+
+        // A record's own text must reach it in the very first neighbourhood
+        // returned, or the traversal is not searching where it is storing.
+        for id in ids.iter().take(5) {
+            let text = crate::retrieval::indexable_text(ledger.record(*id).unwrap()).unwrap();
+            let first = index.neighbourhoods(&embedder.embed(&text)).next().expect("a bucket");
+            assert!(first.contains(id), "{id} is not in the bucket its own text hashes into");
+        }
+    }
+
+    #[test]
+    fn neighbourhoods_run_out_rather_than_repeating_for_ever() {
+        let embedder = HashingEmbedder::default();
+        let index = VectorIndex::empty(Embedder::model_id(&embedder));
+        // Nothing indexed: no planes, so nothing to walk. The iterator must end
+        // rather than spin.
+        assert_eq!(index.neighbourhoods(&embedder.embed("anything")).count(), 0);
     }
 
     #[test]

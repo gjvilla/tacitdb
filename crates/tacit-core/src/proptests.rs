@@ -297,6 +297,31 @@ proptest! {
         prop_assert_eq!(interp.index.advance(&interp.ledger), 0);
     }
 
+    /// The same equivalence for the vector index, which now carries
+    /// neighbourhood buckets as well as vectors (D-0032).
+    ///
+    /// This is the invariant that chose the index: a signature depends on its
+    /// own vector and nothing else, so folding a record in later lands it in
+    /// exactly the bucket a rebuild would. A navigable graph whose edges depend
+    /// on insertion order, or cells whose centroids move as data arrives, could
+    /// not have passed this.
+    #[test]
+    fn vector_index_incremental_equals_rebuild(ops in prop::collection::vec(op_strategy(), 0..40)) {
+        let mut interp = Interpreter::new();
+        let embedder = crate::embedding::HashingEmbedder::default();
+        let model = crate::embedding::Embedder::model_id(&embedder).to_string();
+        let mut incremental = crate::embedding::VectorIndex::empty(&model);
+        for op in &ops {
+            interp.run(std::slice::from_ref(op));
+            incremental.advance(&interp.ledger, &embedder);
+        }
+        prop_assert_eq!(
+            &incremental,
+            &crate::embedding::VectorIndex::rebuild(&interp.ledger, &embedder)
+        );
+        prop_assert_eq!(incremental.advance(&interp.ledger, &embedder), 0);
+    }
+
     /// Retrieval is a pure read and never outruns its budget; and whatever the
     /// default view returns, it returns only records that view admits.
     #[test]

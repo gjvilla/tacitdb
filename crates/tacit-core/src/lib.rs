@@ -32,7 +32,9 @@ pub use content::{
     ClaimContent, Content, GapContent, HypothesisContent, RecordKind, RetireReason, ScoreOutcome,
     VerdictAction, VerdictContent, WithdrawReason,
 };
-pub use embedding::{Embedded, Embedder, HashingEmbedder, VectorIndex, similarity};
+pub use embedding::{
+    Embedded, Embedder, HashingEmbedder, Neighbourhoods, VectorIndex, similarity,
+};
 pub use entity::Entity;
 pub use envelope::{
     Author, AuthorKind, ENVELOPE_VERSION, Envelope, Evidence, ReviewTrigger, SourceRef,
@@ -48,7 +50,7 @@ pub use projection::{
 };
 pub use record::{Draft, Record};
 pub use retrieval::{
-    Budget, Direction, Expansion, Fusion, Item, Outcome, Query, Ranking, Retrieved, Retriever,
+    Budget, Direction, Expansion, Fusion, Item, Outcome, Probe, Query, Ranking, Retrieved, Retriever,
     TextIndex, Via, fuse, indexable_text, tokenize,
 };
 pub use state::{ClaimState, GapState, HypothesisState, RecordState};
