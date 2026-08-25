@@ -39,8 +39,45 @@ use std::collections::{BTreeMap, BTreeSet};
 pub fn tokenize(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
-        .map(|t| t.to_lowercase())
+        .map(|t| fold(&t.to_lowercase()))
         .collect()
+}
+
+/// Land a word and its plural in the same bucket.
+///
+/// A *collision* function, not a linguistic one: it does not need to produce
+/// English, only to produce the same string for "key" and "keys". `does`
+/// becomes `doe` and that is fine, because the document says `doe` too.
+///
+/// Deliberately small, and deliberately only plurals. Suffixes like `-ing` and
+/// `-ed` cannot be stripped consistently without restoring the elided `e`
+/// ("promoting" and "promote" must meet), which is the whole of a real stemmer
+/// and a much larger commitment to English than this earns. What is here is
+/// the case that was measured: a query asking about signing *keys* scored the
+/// record that says *key* seven times at rank nineteen, because the single
+/// most discriminating term in the question matched nothing at all.
+///
+/// This is an English crutch, like the stopword list beside it, and both are
+/// the same bet: that morphology is cheaper to handle badly than to handle
+/// with a model. Recorded in U-23 rather than hidden.
+fn fold(token: &str) -> String {
+    let n = token.len();
+    if n > 4 && token.ends_with("ies") {
+        return format!("{}y", &token[..n - 3]);
+    }
+    if n > 4 && token.ends_with("sses") {
+        return token[..n - 2].to_string();
+    }
+    // `ss`, `us`, `is` are not plural endings: class, status, this.
+    if n > 3
+        && token.ends_with('s')
+        && !token.ends_with("ss")
+        && !token.ends_with("us")
+        && !token.ends_with("is")
+    {
+        return token[..n - 1].to_string();
+    }
+    token.to_string()
 }
 
 /// The text a record contributes to the index. Verdicts contribute nothing:
@@ -257,6 +294,11 @@ pub struct Query {
     /// cover to count as a confident match. A score threshold alone cannot
     /// tell "answers the question" from "shares a few words with it".
     pub min_coverage: f64,
+    /// The fraction of the query's discriminating weight that the corpus can
+    /// speak to at all. Below it, the question is mostly made of words nobody
+    /// here has ever written, and no record covering the rest of it is worth
+    /// calling confident.
+    pub min_known: f64,
     /// Query-side function words. Defaults to [`DEFAULT_STOPWORDS`].
     pub stopwords: Vec<String>,
     /// How many open questions to offer at most. An abstention that lists
@@ -278,6 +320,7 @@ impl Query {
             budget: Budget::default(),
             min_score: 0.0,
             min_coverage: 0.5,
+            min_known: 0.5,
             stopwords: DEFAULT_STOPWORDS.iter().map(|s| s.to_string()).collect(),
             gap_budget: 3,
             min_similarity: 0.5,
@@ -376,6 +419,12 @@ pub struct Retrieved<'a> {
     /// Items dropped by the budget rather than by the filter, so a caller can
     /// tell truncation from absence.
     pub truncated: usize,
+    /// How much of the question the best item covered, and how much of the
+    /// question the corpus can speak to at all. The two numbers the outcome
+    /// rests on, published beside it: a reader who is told "weak" and not why
+    /// cannot tell a shallow answer from an unanswerable question.
+    pub coverage: f64,
+    pub known: f64,
 }
 
 impl Retrieved<'_> {
@@ -432,6 +481,9 @@ const DF_PRUNE_MIN_DOCS: usize = 10;
 /// Gaps surface at this fraction of the match coverage bar.
 const GAP_COVERAGE_RATIO: f64 = 0.5;
 
+/// One ranker's candidates, best first.
+pub type Ranking = Vec<(RecordId, f64)>;
+
 /// Ranked candidates plus the coverage statistics the outcome depends on.
 ///
 /// Coverage is weighted by IDF rather than counting terms, because a result
@@ -443,7 +495,16 @@ const GAP_COVERAGE_RATIO: f64 = 0.5;
 struct Candidates {
     ranked: Vec<(RecordId, f64)>,
     matched_idf: BTreeMap<RecordId, f64>,
+    /// Weight of every discriminating query term, present or not — the
+    /// denominator coverage is measured against.
     total_idf: f64,
+    /// The part of that weight the corpus does not contain, tracked separately
+    /// so the two questions one number was answering can be told apart: "how
+    /// much of this did the record cover" and "how much of it can anything
+    /// here answer". The second is now published as `known`, and it is a
+    /// second condition on confidence rather than a relaxation of the first —
+    /// a question can only get harder to answer confidently, never easier.
+    missing_idf: f64,
 }
 
 impl Candidates {
@@ -452,6 +513,11 @@ impl Candidates {
             return 0.0;
         }
         self.matched_idf.get(id).copied().unwrap_or(0.0) / self.total_idf
+    }
+
+    /// How much of the question the corpus can speak to at all.
+    fn known(&self) -> f64 {
+        if self.total_idf <= 0.0 { 0.0 } else { 1.0 - self.missing_idf / self.total_idf }
     }
 }
 
@@ -531,7 +597,15 @@ impl<'a> Retriever<'a> {
         let mut items: Vec<Item<'a>> = fused
             .iter()
             .filter_map(|(id, score)| {
-                self.ledger.record(*id).map(|record| Item {
+                self.ledger.record(*id).filter(|record| {
+                    // A registered gap is the *absence* of an answer, and it
+                    // has its own channel below. Leaving it here as well let it
+                    // take an answer's place: a question ranked among the
+                    // things that answer it, and one fewer slot for anything
+                    // that does. Measured, not supposed — U-20 and U-29 were
+                    // outranking the records the reader was asking for.
+                    !matches!(record.content(), Content::Gap(_))
+                }).map(|record| Item {
                     record,
                     score: *score,
                     relevance: raw.get(id).copied().unwrap_or(0.0),
@@ -565,9 +639,18 @@ impl<'a> Retriever<'a> {
         let best = items.first().map(|i| i.relevance).unwrap_or(0.0);
         let coverage =
             items.first().map(|i| candidates.coverage(&i.record.id())).unwrap_or(0.0);
+        // Two conditions, because they answer different questions: coverage
+        // asks whether this record answered what was asked, and `known` asks
+        // whether the corpus can speak to what was asked at all. A question
+        // made mostly of words nobody here has written is one to decline,
+        // however well some record covers the remainder of it.
+        let known = candidates.known();
         let outcome = if items.is_empty() {
             Outcome::None
-        } else if coverage >= query.min_coverage && best >= query.min_score {
+        } else if coverage >= query.min_coverage
+            && best >= query.min_score
+            && known >= query.min_known
+        {
             Outcome::Matches
         } else {
             Outcome::WeakMatches
@@ -577,16 +660,28 @@ impl<'a> Retriever<'a> {
         let items = self.apply_budget(items, query.budget);
         let truncated = total - items.len();
 
-        Retrieved { outcome, items, gaps: self.gaps_for(query), truncated }
+        Retrieved { outcome, items, gaps: self.gaps_for(query), truncated, coverage, known }
+    }
+
+    /// The two candidate rankings as they stand before fusion: lexical first,
+    /// vector second (empty when no vector index is attached).
+    ///
+    /// The golden suite grades outcomes. This is the instrument for the step
+    /// before them — whether a ranker found the answer and fusion lost it, or
+    /// whether nothing found it at all. Those are different faults with
+    /// different fixes, and without this they look identical from outside.
+    pub fn candidates(&self, query: &Query) -> (Ranking, Ranking) {
+        (self.lexical_candidates(query).ranked, self.vector_candidates(query))
     }
 
     /// BM25 over the inverted index, with the view's filter applied to each
     /// posting *before* it contributes (R-1).
     fn lexical_candidates(&self, query: &Query) -> Candidates {
-        let stopwords: BTreeSet<&str> = query.stopwords.iter().map(String::as_str).collect();
+        // Folded on both sides, or the list stops matching the words it names.
+        let stopwords: BTreeSet<String> = query.stopwords.iter().map(|w| fold(w)).collect();
         let terms: BTreeSet<String> = tokenize(&query.text)
             .into_iter()
-            .filter(|t| !stopwords.contains(t.as_str()))
+            .filter(|t| !stopwords.contains(t))
             .collect();
         let n = self.index.docs.len() as f64;
         let avgdl = self.index.average_length();
@@ -619,10 +714,25 @@ impl<'a> Retriever<'a> {
         let mut scores: BTreeMap<RecordId, f64> = BTreeMap::new();
         let mut matched_idf: BTreeMap<RecordId, f64> = BTreeMap::new();
         let mut total_idf = 0.0;
+        let mut missing_idf = 0.0;
         for term in &discriminating {
             let Some(postings) = self.index.postings.get(*term) else {
-                // Never written about: weigh it as a `df = 0` term would be.
-                total_idf += ((n + 0.5) / 0.5 + 1.0).ln();
+                // Never written about: weigh it as a `df = 0` term would be,
+                // and count it separately as well.
+                //
+                // It stays in the coverage denominator, and this was measured
+                // rather than assumed. Taking it out is defensible — no record
+                // can cover a word the corpus lacks — and it recovers one
+                // underconfident answer. It also inflates coverage whenever
+                // what remains is generic, and it turned "what licence will the
+                // engine ship under" from a weak miss into a confident wrong
+                // answer. Across the suite the two cases sit at coverage
+                // 0.77/0.60 with reach 0.63/0.64: no threshold separates them,
+                // so the relaxation buys one answer and costs one abstention.
+                // A bluff is the worse failure, so it is not taken (U-23).
+                let weight = ((n + 0.5) / 0.5 + 1.0).ln();
+                total_idf += weight;
+                missing_idf += weight;
                 continue;
             };
             // Document frequency is a collection statistic, computed over the
@@ -653,7 +763,7 @@ impl<'a> Retriever<'a> {
         ranked.sort_by(|a, b| {
             b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
         });
-        Candidates { ranked, matched_idf, total_idf }
+        Candidates { ranked, matched_idf, total_idf, missing_idf }
     }
 
     fn log_order(&self, id: RecordId) -> usize {
@@ -944,17 +1054,88 @@ mod tests {
         assert!(matches!(found.items[0].via, Via::Lexical));
     }
 
+    #[test]
+    fn a_word_and_its_plural_land_in_the_same_bucket() {
+        // The measured case: a question about signing *keys* scored the record
+        // saying *key* seven times at rank nineteen, because the single most
+        // discriminating term in it matched nothing at all.
+        assert_eq!(tokenize("keys"), tokenize("key"));
+        assert_eq!(tokenize("verdicts"), tokenize("verdict"));
+        assert_eq!(tokenize("queries"), tokenize("query"));
+        assert_eq!(tokenize("classes"), tokenize("class"));
+
+        // Endings that are not plurals stay whole.
+        assert_eq!(tokenize("class"), vec!["class"]);
+        assert_eq!(tokenize("status"), vec!["status"]);
+        assert_eq!(tokenize("this"), vec!["this"]);
+        // Short words are left alone rather than shortened into collisions.
+        assert_eq!(tokenize("is"), vec!["is"]);
+        assert_eq!(tokenize("as"), vec!["as"]);
+
+        // It only has to be consistent, not linguistic: the index folds by the
+        // same rule the query does, so `doe` matching `doe` is a match.
+        assert_eq!(tokenize("does"), tokenize("doe"));
+    }
+
+    #[test]
+    fn a_question_the_corpus_has_no_words_for_says_so_separately() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+
+        // Every discriminating word is one nobody here has written.
+        let stranger = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("sharding across geographic regions"),
+        );
+        assert_eq!(stranger.known, 0.0);
+        assert_ne!(stranger.outcome, Outcome::Matches);
+
+        // And a question in the corpus's own words reaches it completely. The
+        // two numbers are published rather than folded together: a reader told
+        // "weak" and not why cannot tell a shallow answer from an unanswerable
+        // question.
+        let native = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener newton metres"),
+        );
+        assert_eq!(native.known, 1.0);
+        assert!(native.coverage > 0.5);
+        assert_eq!(native.outcome, Outcome::Matches);
+    }
+
     /// R-1: the filter runs while scoring, so an unpromoted claim never
     /// contributes — not even to be discarded afterwards.
     #[test]
     fn the_view_filter_is_applied_during_scoring() {
-        let (ledger, _, _) = setup();
+        let (ledger, _, rail) = setup();
+        let rail_claim = ledger
+            .records()
+            .find(|r| indexable_text(r).is_some_and(|t| t.contains("binds")))
+            .map(|r| r.id())
+            .expect("the rail claim");
+        let _ = rail;
         let index = TextIndex::rebuild(&ledger);
         let projection = Projection::rebuild(&ledger);
         let query = Query::text("seat rail binds cold fixture");
 
         let default = retrieve(&index, &ledger, &projection, ViewSpec::now(), &query);
-        assert_eq!(default.outcome, Outcome::None, "the rail claim is only proposed");
+        // The property under test is that the proposed claim never contributes,
+        // which is checked directly. It used to be checked by asserting that
+        // nothing at all came back — which held only because "seat" and "seats"
+        // could not meet, so the *promoted* claim was invisible to this query
+        // too. Folding plurals made it visible, weakly and correctly.
+        assert!(
+            !default.items.iter().any(|i| i.record.id() == rail_claim),
+            "the rail claim is only proposed"
+        );
+        assert_eq!(default.outcome, Outcome::WeakMatches);
 
         let with_proposed = retrieve(
             &index,
@@ -963,8 +1144,12 @@ mod tests {
             ViewSpec::now().with_states(StateFilter::PromotedAndProposed),
             &query,
         );
+        // Admitting proposed claims brings the rail claim in, and it wins on
+        // its own words. The promoted claim is still there, still weakly, for
+        // the "seat"/"seats" overlap.
         assert_eq!(with_proposed.outcome, Outcome::Matches);
-        assert_eq!(with_proposed.items.len(), 1);
+        assert_eq!(with_proposed.items[0].record.id(), rail_claim);
+        assert!(with_proposed.items.len() > default.items.len());
     }
 
     #[test]
@@ -1055,9 +1240,19 @@ mod tests {
             ViewSpec::now(),
             &Query::text("fastener torque").scoped_to(vec![torque]),
         );
-        assert_eq!(both.outcome, Outcome::Matches);
+        // Weak, and it should be. The only thing this record holds about torque
+        // is an open question; the one promoted claim covers "fastener" and not
+        // "torque". This read `matches` until gaps stopped occupying answer
+        // slots — the gap was ranking first and its coverage was deciding how
+        // confident the *answer* looked, which is a question flattering the
+        // absence of an answer to it.
+        assert_eq!(both.outcome, Outcome::WeakMatches);
         assert!(both.has_registered_gap());
-        assert_eq!(both.tags(), vec!["matches", "registered_gap"]);
+        assert_eq!(both.tags(), vec!["weak_matches", "registered_gap"]);
+        assert!(
+            both.items.iter().all(|i| !matches!(i.record.content(), Content::Gap(_))),
+            "a gap is never an answer"
+        );
     }
 
     /// An answered gap stops being an open question, so it stops being an

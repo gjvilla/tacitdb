@@ -70,16 +70,16 @@ check that no record was written *about* it.
 | G-06 | is this a personal project or owned by an employer | answer D-0010 | Greg Villa | when U-7 resolves |
 | G-07 | why was the working name retired | answer D-0011 | Greg Villa | when U-6 resolves |
 | G-08 | what did the prior art survey conclude about building versus adopting | answer D-0008 (pending U-23) | Greg Villa | when a surveyed engine ships the wedge |
-| G-09 | which storage engine does the project use | abstain U-5 (pending U-23) | Greg Villa | when U-5 resolves |
+| G-09 | which storage engine does the project use | answer D-0019 (pending U-23) | Greg Villa | when the store stops being an append-only log |
 | G-10 | what licence will the engine ship under | abstain U-17 (pending U-23) | Greg Villa | when U-17 resolves |
 | G-15 | what happens in the ledger when a decision record is edited | answer D-0021 | Greg Villa | when the ingest stops being a sync |
 | G-16 | what does the engine do if the machine clock moves backwards | answer D-0022 | Greg Villa | when more than one process writes one log |
 | G-17 | what is recorded when an open question is reworded rather than answered | answer D-0023 | Greg Villa | when a fifth withdrawal reason is wanted |
 | G-18 | does the review inbox list every unreviewed claim | answer D-0024 | Greg Villa | when an author can retract a proposal outright |
-| G-19 | what stops someone editing a file from promoting a claim | answer D-0025 (pending U-23) | Greg Villa | when U-31 resolves |
-| G-20 | which signing keys does the project accept for verdicts | answer D-0026 (pending U-23) | Greg Villa | when U-32 resolves |
+| G-19 | what stops someone editing a file from promoting a claim | answer D-0025 (pending U-23) | Greg Villa | when a second channel can carry a verdict |
+| G-20 | which signing keys does the project accept for verdicts | answer D-0026 (pending U-23) | Greg Villa | when trust is re-checked automatically |
 | G-21 | what happens to an old promotion when a signing key is revoked | answer D-0027 | Greg Villa | when a weakening must reach someone away from a terminal |
 | G-11 | how does sharding across geographic regions work | abstain | Greg Villa | never — this is outside the record by design |
 | G-12 | what is the maximum supported cluster size | abstain | Greg Villa | never — this is outside the record by design |
-| G-13 | how many concurrent writers does the store support | abstain | Greg Villa | when U-5 resolves |
+| G-13 | how many concurrent writers does the store support | answer D-0015 (pending U-23) | Greg Villa | when more than one process may write one store |
 | G-14 | what colour is the logo | abstain | Greg Villa | never — this is outside the record by design |

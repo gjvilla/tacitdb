@@ -1020,6 +1020,83 @@ one record altered.
 
 ---
 
+## D-0028 · Measure the ranker before believing what is wrong with it
+
+```yaml
+id: D-0028
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: retrieval round — narrows U-23
+evidence: [docs/GOLDEN.md, docs/REGISTER.md]
+review_trigger: when a model that sees meaning is plugged in, or when the
+  corpus outgrows a single-machine index
+```
+
+**Assertion.** U-23 said what remained was a model. Measuring it found four
+faults ahead of that, three of them fixable without one: gaps were occupying
+answer slots, a word could not reach its own plural, and one number was
+answering two questions. A diagnostic (`--example explain`) now exists for the
+step the golden suite does not grade, and the suite checks its own review
+triggers.
+
+**Guessing was worse than measuring, repeatedly.** The fusion constant looked
+wrong — RRF's `k = 60` comes from runs over thousands of documents and this
+corpus has fifty. Sweeping it across six values changed the score by nothing at
+all. The actual fault was that a question about signing *keys* could not reach a
+record saying *key* seven times, and no amount of re-weighting two rankings
+fixes a term that matches nothing.
+
+**A registered gap is not an answer, and stopped being ranked as one.** Gaps have
+their own channel and were also being returned among the answers, where they
+took a slot and, worse, set the confidence. One test had been asserting a
+confident match whose confidence came entirely from a *question* about the
+subject. It now reads weak, correctly.
+
+**Plurals fold, and this is an English crutch on purpose.** `key` and `keys` land
+in the same bucket, `class` and `status` are left alone. Only plurals: `-ing` and
+`-ed` cannot be stripped consistently without restoring the elided `e`, which is
+a whole stemmer and a larger commitment to English than this earns. It is the
+same bet as the stopword list beside it, and it is written down rather than
+hidden.
+
+**One number was doing two jobs, and separating them is a second condition and
+never a relaxation.** Coverage asks how much of the question a record covered;
+reach asks how much of it anything here could. Both are published on the result,
+because a reader told "weak" and not why cannot tell a shallow answer from an
+unanswerable question. Reach separates the suite cleanly — every unanswerable
+question sits at or below 0.32 and every answerable one at or above 0.52.
+
+**And the relaxation that came with it was measured and refused.** Dropping
+unmatchable terms from the coverage denominator recovers one underconfident
+answer and turns "what licence will the engine ship under" into a confident
+wrong one. The two sit at coverage 0.77 and 0.60 with reach 0.63 and 0.64: no
+threshold separates them. A bluff is the worse failure, so the denominator keeps
+its missing terms and reach is only ever an extra reason to decline.
+
+**The suite had gone stale in exactly the way it warns about.** Four questions
+carried review triggers naming registered unknowns that had since been resolved,
+and nothing was checking them. One expected an abstention citing U-5 — a gap the
+engine could no longer cite, because it had been answered — and it *passed*, on a
+system that failed to answer a question it had since learned the answer to. Two
+failures cancelling is the worst way for a test to be green. The runner now
+fails the build when a question rests on a trigger that has fired.
+
+**What the numbers did, honestly.** Sixteen of twenty-one before, sixteen of
+twenty-one after. One question genuinely recovered, and two that had been passing
+against expectations the record outgrew now fail against correct ones. The score
+did not move because the system got better and the test got harder at the same
+time, and saying "no change" would describe neither.
+
+**What is left needs meaning, and now only that.** Three shortfalls remain where
+the record answers the question in words the question does not use: `store` for
+"storage", "one process owns a store at a time" for "how many concurrent
+writers". No lexical repair reaches those. The `Embedder` trait is still how a
+model arrives, and the ground under it is now measured rather than assumed.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

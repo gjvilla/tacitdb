@@ -48,8 +48,8 @@ pub use projection::{
 };
 pub use record::{Draft, Record};
 pub use retrieval::{
-    Budget, Direction, Expansion, Fusion, Item, Outcome, Query, Retrieved, Retriever, TextIndex,
-    Via, fuse, indexable_text, tokenize,
+    Budget, Direction, Expansion, Fusion, Item, Outcome, Query, Ranking, Retrieved, Retriever,
+    TextIndex, Via, fuse, indexable_text, tokenize,
 };
 pub use state::{ClaimState, GapState, HypothesisState, RecordState};
 pub use validity::Validity;

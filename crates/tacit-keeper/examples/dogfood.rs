@@ -407,7 +407,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Scored honestly: (a) durable, re-validated, and current, with the document");
     println!("  deliberately upstream and U-29 the price of that; (b) capability met;");
     println!("  (c) instrument exists and reports honestly.");
-    println!("  Retrieval quality (U-23) is the open work, not the grading.");
+    println!("  Retrieval quality (U-23) is the open work, not the grading — and as of");
+    println!("  D-0028 it is smaller than it looked: three of the four faults measured");
+    println!("  were lexical and are fixed. What is left needs a model that sees meaning.");
 
     println!();
     Ok(())

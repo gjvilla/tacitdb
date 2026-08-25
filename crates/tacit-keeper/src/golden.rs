@@ -244,6 +244,32 @@ pub fn run(
 
 /// Grade with vector candidates in the plan as well, so the suite can measure
 /// what the second ranker actually changed rather than anyone asserting it.
+/// Golden questions whose review trigger names a registered unknown that has
+/// since been resolved, with what the trigger said.
+///
+/// The suite is a set of agreed answers, and an agreement goes stale the moment
+/// the thing it was agreed about changes. Every question carries a trigger for
+/// exactly that reason and nothing was checking them — so `abstain U-5` sat in
+/// the suite for a day after U-5 was resolved, unsatisfiable (an answered gap
+/// cannot be cited as registered) and *passing*, because the system failed to
+/// answer a question it had since learned the answer to. Two failures cancelling
+/// is the worst way for a test to be green.
+pub fn stale_triggers(
+    questions: &[GoldenQuestion],
+    unknowns: &[crate::register::ParsedUnknown],
+) -> Vec<(String, String)> {
+    questions
+        .iter()
+        .filter_map(|question| {
+            let named = crate::parse::mentioned_ids(&question.review_trigger, &question.id);
+            let fired = named.iter().find(|id| {
+                unknowns.iter().any(|u| u.id == **id && u.resolved.is_some())
+            })?;
+            Some((question.id.clone(), format!("{fired} is resolved: \"{}\"", question.review_trigger)))
+        })
+        .collect()
+}
+
 pub fn run_with(
     ledger: &Ledger,
     projection: &Projection,
@@ -408,6 +434,58 @@ mod tests {
 
     /// A `pending` marker must name a registered unknown, or it is just a way
     /// of declaring the suite green.
+    #[test]
+    fn a_trigger_that_has_already_fired_is_caught() {
+        let suite = "\
+| id | Question | Expected | Owner | Review trigger |
+|----|----------|----------|-------|----------------|
+| G-01 | which storage engine does the project use | abstain U-5 | Greg Villa | when U-5 resolves |
+| G-02 | what is the atomic unit of memory | answer D-0004 | Greg Villa | when the envelope changes |
+";
+        let register = "\
+## Room 2
+
+| id | Question | Trigger | Notes |
+|----|----------|---------|-------|
+| U-5 | ~~Storage layer~~ **Resolved 2026-08-23** → D-0019: an append-only log | — | settled |
+| U-9 | Seed corpus beyond self-hosting | before the golden suite | open |
+
+*Recorded 2026-08-23. Owner: Greg Villa.*
+";
+        let questions = parse_golden(suite).expect("suite parses");
+        let unknowns = crate::register::parse_register(register).expect("register parses");
+        let stale = stale_triggers(&questions, &unknowns);
+
+        // The exact shape that survived a day in the real suite: an expectation
+        // resting on a gap that had since been answered — unsatisfiable, and
+        // passing, because the system failed to answer a question it had since
+        // learned the answer to.
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].0, "G-01");
+        assert!(stale[0].1.contains("U-5 is resolved"));
+    }
+
+    #[test]
+    fn a_trigger_naming_an_open_question_is_not_stale() {
+        let suite = "\
+| id | Question | Expected | Owner | Review trigger |
+|----|----------|----------|-------|----------------|
+| G-01 | what licence will the engine ship under | abstain U-17 | Greg Villa | when U-17 resolves |
+";
+        let register = "\
+## Room 2
+
+| id | Question | Trigger | Notes |
+|----|----------|---------|-------|
+| U-17 | Engine license | before the repo goes public | open |
+
+*Recorded 2026-08-23. Owner: Greg Villa.*
+";
+        let questions = parse_golden(suite).expect("suite parses");
+        let unknowns = crate::register::parse_register(register).expect("register parses");
+        assert!(stale_triggers(&questions, &unknowns).is_empty());
+    }
+
     #[test]
     fn pending_markers_name_a_registered_unknown() {
         let text = std::fs::read_to_string(repo_root().join("docs/REGISTER.md")).unwrap();

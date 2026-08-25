@@ -127,11 +127,36 @@ fn main() -> ExitCode {
 
     compare(&lexical_only, &card, &vectors, &embedder);
 
-    if card.regressions().is_empty() {
+    // An agreed answer goes stale the moment the thing it was agreed about
+    // changes, and every question carries a trigger saying when to re-read it.
+    // Nothing was checking them, which is how `abstain U-5` survived a day past
+    // U-5 being resolved — unsatisfiable, and passing.
+    let register = std::fs::read_to_string(repo.join("docs/REGISTER.md")).unwrap_or_default();
+    let unknowns = tacit_keeper::parse_register(&register).unwrap_or_default();
+    let stale = tacit_keeper::stale_triggers(&questions, &unknowns);
+    if !stale.is_empty() {
+        println!("\n\x1b[1mTRIGGERS THAT HAVE FIRED\x1b[0m");
+        println!("{}", "─".repeat(64));
+        for (id, why) in &stale {
+            println!("  {id}  {why}");
+        }
+        println!();
+        println!("  Re-read each question against the record as it now stands, then give it");
+        println!("  a trigger that has not already fired. A suite nobody re-reads is a");
+        println!("  record of what was once true.");
+    }
+
+    if card.regressions().is_empty() && stale.is_empty() {
         println!();
         ExitCode::SUCCESS
     } else {
-        println!("\n  {} regression(s) — the suite is red.\n", card.regressions().len());
+        if !card.regressions().is_empty() {
+            println!("\n  {} regression(s) — the suite is red.", card.regressions().len());
+        }
+        if !stale.is_empty() {
+            println!("  {} question(s) resting on a trigger that has fired.", stale.len());
+        }
+        println!();
         ExitCode::FAILURE
     }
 }

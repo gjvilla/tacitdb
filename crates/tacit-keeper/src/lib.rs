@@ -18,6 +18,8 @@ pub use corpus::{
 };
 pub use attest::{Attestation, Blame, Recheck, TrustReview, Verified, review_trust};
 pub use origin::Origin;
-pub use golden::{Expectation, GoldenQuestion, Graded, Scorecard, Verdict, parse_golden};
+pub use golden::{
+    Expectation, GoldenQuestion, Graded, Scorecard, Verdict, parse_golden, stale_triggers,
+};
 pub use parse::{ParseError, ParsedRecord, parse_corpus};
 pub use register::{ParsedUnknown, Resolution, parse_register};
