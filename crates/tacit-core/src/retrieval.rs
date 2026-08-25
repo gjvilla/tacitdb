@@ -864,7 +864,7 @@ impl<'a> Retriever<'a> {
     }
 
     fn log_order(&self, id: RecordId) -> usize {
-        self.ledger.log().iter().position(|r| *r == id).unwrap_or(usize::MAX)
+        self.ledger.log_position(id).unwrap_or(usize::MAX)
     }
 
     /// Walk out from the entities the seeds are about, collecting records the

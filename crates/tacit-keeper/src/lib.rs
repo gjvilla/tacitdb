@@ -10,6 +10,7 @@ pub mod golden;
 pub mod origin;
 pub mod parse;
 pub mod register;
+pub mod synthetic;
 
 pub use corpus::{
     Attest, Attestations, DECISION_KIND, DECISIONS_DOC, Disposition, IngestError,
@@ -23,3 +24,4 @@ pub use golden::{
 };
 pub use parse::{ParseError, ParsedRecord, parse_corpus};
 pub use register::{ParsedUnknown, Resolution, parse_register};
+pub use synthetic::{Corpus, Shape, Topic, generate};

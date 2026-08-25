@@ -38,6 +38,12 @@ pub struct Ledger {
     /// Total append order. State folds run in log order, not timestamp order,
     /// so same-millisecond appends stay deterministic.
     log: Vec<RecordId>,
+    /// Record → its position in the log. The reverse of `log`, kept because
+    /// finding a record's order by scanning is O(n) and callers want it inside
+    /// sort comparators — which made a ranking over 35,000 candidates do a
+    /// linear pass of a 68,000-entry log per comparison. Found by generating a
+    /// corpus large enough to notice (D-0030).
+    order: BTreeMap<RecordId, usize>,
     /// Record → verdicts touching it, in log order.
     by_target: BTreeMap<RecordId, Vec<RecordId>>,
     /// Record → the records that supersede it, in log order. The reverse of
@@ -382,6 +388,7 @@ impl Ledger {
             self.replacements.entry(prior).or_default().push(id);
         }
         self.records.insert(id, record);
+        self.order.insert(id, self.log.len());
         self.log.push(id);
         self.last_recorded_at = Some(recorded_at);
     }
@@ -587,6 +594,11 @@ impl Ledger {
     /// The append log, in order. This *is* the definition of record order.
     pub fn log(&self) -> &[RecordId] {
         &self.log
+    }
+
+    /// Where a record sits in the log, in constant-ish time.
+    pub fn log_position(&self, id: RecordId) -> Option<usize> {
+        self.order.get(&id).copied()
     }
 
     pub fn records(&self) -> impl Iterator<Item = &Record> {

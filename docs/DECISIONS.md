@@ -1161,6 +1161,68 @@ noticing. A discipline nobody checks is a wish.
 
 ---
 
+## D-0030 · A second corpus, generated, in words the first one cannot contain
+
+```yaml
+id: D-0030
+state: promoted
+author: Greg Villa
+recorded: 2026-08-24
+valid_from: 2026-08-24
+source: scale round — narrows U-9
+evidence: [docs/REQUIREMENTS.md, docs/REGISTER.md]
+review_trigger: when retrieval quality must be graded on real language, or when
+  the target scale moves past a single machine
+```
+
+**Assertion.** The keeper can generate a deterministic corpus of arbitrary size —
+subjects, claims, human verdicts, gaps closed every way the grammar allows,
+supersessions, planted contradictions, dated predictions — together with the
+ground truth of what it built. `--example scale` runs the engine over it and
+reports costs. Every topic's vocabulary is pseudo-words built from the seed.
+
+**Two things the self-hosting corpus structurally cannot do.** It cannot say
+anything about scale: R-7 names 10^5–10^7 nodes and fifty-four records is four
+orders short, so every registered cost had been reasoned about from the shape of
+the code and never observed. And it cannot grade retrieval honestly, because it
+describes its own grading — a record explaining why a question fails contains
+that question's rarest words and then ranks for it (U-27).
+
+**The separation is structural, not a discipline.** Nobody can accidentally write
+`tamiro` into a decision record, and no question about `tamiro` can be answered
+by a record about retrieval. That is a stronger guarantee than the rule against
+quoting questions, which catches phrases and cannot catch vocabulary.
+
+**It found a bug the small corpus could never have surfaced.** Ranking sorted
+candidates with a tie-break that located a record by scanning the whole log — an
+O(n) lookup inside a comparator, called twice per comparison. Invisible at
+fifty-four records and quadratic thereafter. Indexing the log position cut a
+hybrid query at 68,000 records from 158ms to 39ms. Nothing about the code had
+changed; only the size of what it was pointed at.
+
+**And it turned two registered costs from adjectives into numbers.** U-25 says an
+fsync per append is "correct but slow for bulk ingest": it is 2µs per record in
+memory and **4,095µs durable**, a factor of two thousand, so 4,365 records take
+eighteen seconds and a hundred thousand would take most of an hour. That is not
+slow, it is a different regime, and the register understated it. U-26's exact
+vector scan costs 6× the lexical half at a thousand records, 73× at seventeen
+thousand and 135× at sixty-eight thousand — and the scan is not the whole of it,
+because every candidate also pays a state fold to be admitted.
+
+**What it deliberately is not.** Synthetic prose has no paraphrase, no dialect
+and no jargon drift. This corpus measures ranking, filtering and cost, and it
+cannot measure the thing U-23 is actually about. A public corpus of real
+decisions — a body of published proposals with authors, dates, statuses and
+supersessions — is the other half of U-9 and stays open, along with the licensing
+and repository-weight questions that vendoring one raises.
+
+**The engine, meanwhile, is fine at this size.** Appends, index builds,
+projections, contradiction detection and the lexical ranker are all linear and
+all comfortable at 68,000 records on one machine. Every ground-truth query
+returns its own topic's record first, at both sizes and with either plan.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
