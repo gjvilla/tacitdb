@@ -1658,6 +1658,55 @@ times in one.
 
 ---
 
+## D-0038 · No assignment clause exists, and the authorship record is corrected
+
+```yaml
+id: D-0038
+state: promoted
+author: Greg Villa
+recorded: 2026-08-29
+valid_from: 2026-08-29
+source: resolution of U-7 — employer confirmed to have no IP/invention-assignment
+  agreement in force
+evidence: [docs/DISCLOSURE.md, docs/REGISTER.md]
+review_trigger: if the employer later introduces an IP agreement, or if any
+  claim on this work is asserted; and before any public release, confirm the
+  factual basis below is still true
+```
+
+**Assertion.** U-7 resolves on a fact: there is no employment agreement carrying
+an invention-assignment clause at the author's employer — no such agreement was
+ever signed. The question D-0035 kept open ("does the clause reach this
+project?") has no clause to answer it. With ownership no longer an open
+question, the authorship record is corrected: every commit is restamped from the
+employer address to the author's personal identity
+(`Greg Villa <gjvilla121@gmail.com>`), via `git filter-repo --mailmap`.
+
+**Why rewriting is now permissible when D-0035 forbade it.** D-0035's refusal
+was conditional, not absolute: restamping authorship *while ownership was the
+open question* would have been tidying evidence. The condition has lifted — the
+resolution is recorded here, in a commit made before the rewrite, and the
+pre-rewrite history is preserved in full in a mirror clone
+(`../tacit-backup.git`, head `29d1fa15f2e173d0c04aaf509083def8460c42ab`). The
+evidence is kept, not tidied; what changes is the working record going forward.
+
+**What the rewrite changes and what it deliberately does not.** Author and
+committer identities change; every commit hash changes with them; the old GPG
+signatures — made under a key whose UID carries the employer address, and
+invalidated by any rewrite regardless — are dropped. Commit *timestamps* are
+untouched: the weekday-afternoon pattern D-0035 recorded is a fact about when
+this was built, and it stays in the record. DISCLOSURE.md stays in the tree as
+the factual page it was, updated to say how the question closed.
+
+**What this does not resolve.** The absence of a signed agreement is the
+strongest fact available, but it is a layperson's reading of it; jurisdictional
+default doctrines (shop rights, scope-of-employment work) were not examined by
+counsel. U-7 is resolved on the recorded facts; the residual counsel item joins
+U-6's, to be closed before commercial use. The boundary script keeps reading
+commit identity — the gate stays mechanical; only the violation is gone.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

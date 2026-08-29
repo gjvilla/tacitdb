@@ -66,24 +66,31 @@ than tidied:
    afternoon. What that means depends on facts about my working arrangements
    that are not in this repository.
 
-Neither has been altered. The commit identities in history are being left as
-they are on purpose: rewriting the authorship record of a project whose
-ownership is an open question would be tidying evidence, whatever else it would
-be.
+While the question was open, neither was altered: rewriting the authorship
+record of a project whose ownership is an open question would have been tidying
+evidence, whatever else it would be (D-0035).
 
-## What is being asked
+## How the question closed
 
-Written clarity on one question: **does my employment agreement's
-invention-assignment clause reach this project, and if it does not, will the
-employer say so in writing?**
+**Resolved 2026-08-29 (D-0038): no employment agreement carrying an
+invention-assignment clause exists at my employer — none was ever signed.** The
+question this page was written to ask ("does the clause reach this project?")
+has no clause to answer it.
 
-The facts that bear on it, as far as I know them: it was built outside the scope
-of any assigned work, it uses no employer resource other than — per the facts
-above — a laptop and an email identity that need to be established one way or
-the other, and it is in a domain adjacent to my employer's business, which is
-the case such clauses are usually written to reach.
+With ownership no longer open, the authorship record was corrected: every
+commit was restamped from the employer address to my personal identity via
+`git filter-repo --mailmap`, with the complete pre-rewrite history preserved in
+a mirror clone made first. Commit timestamps — including the weekday-afternoon
+pattern in fact 2 above — were deliberately left untouched; they are facts about
+when this was built and they stay in the record. This page stays in the tree as
+the factual account it was.
+
+What remains is narrower than U-7 was: a counsel review before any commercial
+use (jurisdictional default doctrines were not examined by a lawyer), tracked
+with U-6's counsel item.
 
 ---
 
-*Recorded 2026-08-24. Tracked as U-7 in [REGISTER.md](REGISTER.md). Blocking any
-public release, along with U-6 (name) and U-17 (licence).*
+*Recorded 2026-08-24; resolved 2026-08-29 (D-0038). Tracked as U-7 in
+[REGISTER.md](REGISTER.md). Public release now blocked only by U-6 (name) and
+U-17 (licence).*

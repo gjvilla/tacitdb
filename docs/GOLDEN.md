@@ -67,7 +67,7 @@ check that no record was written *about* it.
 | G-03 | where does the write-path ratchet live, the engine or the keeper | answer D-0012 | Greg Villa | when invariants 1-8 change |
 | G-04 | what separates the governed ledger from the instrument panel | answer D-0013 | Greg Villa | when the two-ledger boundary is redrawn |
 | G-05 | what workload is v1 designed against | answer D-0003 | Greg Villa | when the v1 workload changes |
-| G-06 | is this a personal project or owned by an employer | answer D-0010 | Greg Villa | when U-7 resolves |
+| G-06 | is this a personal project or owned by an employer | answer D-0010 | Greg Villa | re-read 2026-08-29 on resolution (D-0038): the answer stands, now backed by fact; re-review if the employer introduces an IP agreement or asserts a claim |
 | G-07 | why was the working name retired | answer D-0011 | Greg Villa | when U-6 resolves |
 | G-08 | what did the prior art survey conclude about building versus adopting | answer D-0008 (pending U-23) | Greg Villa | when a surveyed engine ships the wedge |
 | G-09 | which storage engine does the project use | answer D-0019 (pending U-23) | Greg Villa | when the store stops being an append-only log |

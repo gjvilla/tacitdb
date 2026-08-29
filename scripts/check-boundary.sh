@@ -26,30 +26,25 @@ if grep -rnE '\bSYSTEM-E\b|\bsystem-e[-_][a-z]+' "${targets[@]}"; then
   status=1
 fi
 
-# Authorship is part of the boundary and was not being checked. A personal
-# project every commit of which is authored and signed under the employer's
-# domain is making a claim in its own record that its own decision record
-# denies (D-0010, U-7).
-#
-# The split matters: what the *next* commit will say is fixable, so it fails.
-# What history already says is reported and never failed on — history is not
-# rewritten here (D-0019), and least of all the authorship record of a project
-# whose ownership is the open question. Quietly restamping twenty commits with
-# a different name would be tidying evidence.
+# Authorship is part of the boundary (D-0035). U-7 resolved 2026-08-29
+# (D-0038): no invention-assignment agreement exists, and history was
+# restamped to the personal identity — with the pre-rewrite record preserved
+# in a mirror clone — so both halves of this check should now be quiet. The
+# check stays: the gate is mechanical, and it would fire again if the
+# employer identity ever reappeared.
 if git rev-parse --git-dir >/dev/null 2>&1; then
   who="$(git config user.email 2>/dev/null || true)"
   if printf '%s' "$who" | grep -qiE '@employer\.'; then
     echo "BOUNDARY: the next commit here would be attributed to $who"
-    echo "  This is U-7 and it is expected to stay red until U-7 resolves. It is not"
-    echo "  a new problem each time you see it; it is the release gate, made"
-    echo "  mechanical. U-7 already blocks publishing — this stops that depending on"
-    echo "  somebody remembering. Do not silence it; resolve U-7."
+    echo "  U-7 resolved (D-0038) and history was corrected; an employer identity"
+    echo "  must not reappear here. Set git user.email to the personal address."
     status=1
   fi
   past="$(git log --format='%ae%n%ce' 2>/dev/null | grep -ciE '@employer\.' || true)"
   if [ "${past:-0}" -gt 0 ]; then
-    echo "note: $past commit identities already in history carry the employer's"
-    echo "      domain. Left alone deliberately — see U-7 and D-0035."
+    echo "BOUNDARY: $past commit identities in history carry the employer's domain."
+    echo "  History was restamped when U-7 resolved (D-0038); it should be clean."
+    status=1
   fi
 fi
 
