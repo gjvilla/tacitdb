@@ -425,6 +425,12 @@ pub struct Item<'a> {
     pub score: f64,
     /// The best underlying ranker score. This is what `min_score` judges.
     pub relevance: f64,
+    /// How much of the question's discriminating weight *this* record covers.
+    /// Published per item (U-44) because the outcome's confidence has to be
+    /// read from some record, fused order chooses which one arrives first,
+    /// and a consumer told only the aggregate cannot see when the second item
+    /// answers more of the question than the first.
+    pub coverage: f64,
     /// Cosine similarity to the query, when vector candidates are in play.
     pub similarity: f64,
     pub via: Via,
@@ -463,10 +469,19 @@ pub struct Retrieved<'a> {
     /// Items dropped by the budget rather than by the filter, so a caller can
     /// tell truncation from absence.
     pub truncated: usize,
-    /// How much of the question the best item covered, and how much of the
+    /// How much of the question the *first* item covered, and how much of the
     /// question the corpus can speak to at all. The two numbers the outcome
     /// rests on, published beside it: a reader who is told "weak" and not why
     /// cannot tell a shallow answer from an unanswerable question.
+    ///
+    /// First, not best — measured and kept (U-44, D-0043). This field once
+    /// said "best item" while the code read the first, and judging the best
+    /// coverage among assembled items was tried against both suites: it
+    /// manufactures confidence from whichever record covers the most words,
+    /// and the record covering the most words of an unanswerable question is
+    /// simply the longest one. Each item carries its own coverage; a consumer
+    /// who can weigh meaning may prefer a later item, and this engine does
+    /// not pretend it can.
     pub coverage: f64,
     pub known: f64,
     /// Query terms the index read as a near neighbour, as (asked, read as).
@@ -755,6 +770,7 @@ impl<'a> Retriever<'a> {
                     score: *score,
                     excerpt: None,
                     relevance: raw.get(id).copied().unwrap_or(0.0),
+                    coverage: candidates.coverage(id),
                     similarity: similarities.get(id).copied().unwrap_or(0.0),
                     via: match (raw.contains_key(id), similarities.contains_key(id)) {
                         (true, true) => Via::Hybrid,
@@ -1040,6 +1056,7 @@ impl<'a> Retriever<'a> {
                                 // a match: it never outranks a direct hit.
                                 score: 0.0,
                                 relevance: 0.0,
+                                coverage: 0.0,
                                 similarity: 0.0,
                                 via: Via::Expanded { from: *seed, path: path.clone() },
                                 excerpt: None,
@@ -1856,6 +1873,62 @@ mod tests {
         assert!(
             position(&old, middling) < position(&old, champion),
             "k=60 prefers the middling pair"
+        );
+    }
+
+    /// U-44, held down: each item publishes its own coverage, and the outcome
+    /// is judged from the first item's — deliberately, not by oversight
+    /// (D-0043). Judging the best coverage among assembled items was measured
+    /// on both suites and refused: the record covering the most words of an
+    /// unanswerable question is simply the longest one, so "best" manufactures
+    /// confidence out of document length. The engine publishes the per-item
+    /// number and declines to weigh it, because weighing it takes meaning.
+    #[test]
+    fn confidence_is_the_first_items_and_each_item_publishes_its_own() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("process", "torque").unwrap();
+        // Dense: one term, repeated — BM25 rewards a short document about one
+        // word, which is what puts it first.
+        let dense = ledger
+            .append(prose(subject, "torque torque torque torque torque", Author::human("M")))
+            .unwrap();
+        ledger.append(promote(dense)).unwrap();
+        // Complete: covers both terms, diluted in a longer document.
+        let filler = "assorted unrelated words about other matters entirely ".repeat(12);
+        let complete = ledger
+            .append(prose(
+                subject,
+                &format!("{filler} torque calibration {filler}"),
+                Author::human("M"),
+            ))
+            .unwrap();
+        ledger.append(promote(complete)).unwrap();
+        // Background records, so the query terms are rare enough to matter.
+        for n in 0..4 {
+            let body = format!("record {n} discussing other equipment at length {filler}");
+            let id = ledger.append(prose(subject, &body, Author::human("M"))).unwrap();
+            ledger.append(promote(id)).unwrap();
+        }
+
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("torque calibration"),
+        );
+        assert_eq!(found.items[0].record.id(), dense, "the dense one-term record ranks first");
+        assert!(
+            found.items[0].coverage < found.items[1].coverage,
+            "the second item covers more of the question ({} vs {})",
+            found.items[0].coverage,
+            found.items[1].coverage
+        );
+        assert_eq!(
+            found.coverage, found.items[0].coverage,
+            "the outcome reads the first item, deliberately"
         );
     }
 

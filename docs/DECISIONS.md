@@ -1959,6 +1959,62 @@ corpus-relative and any future proposal starts by reading it again.
 
 ---
 
+## D-0043 · Confidence is published per item and judged from the first
+
+```yaml
+id: D-0043
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: resolution of U-44 — per-item coverage made visible, then the
+  known-shape fix measured against it and half-refused
+evidence: [docs/REGISTER.md, crates/tacit-core/src/retrieval.rs,
+  crates/tacit-keeper/examples/calibration.rs]
+review_trigger: when a ranker that understands meaning joins the plan — it
+  could weigh a later item's coverage where this engine declines to; and any
+  future move on the outcome rule starts from the calibration table
+```
+
+**Assertion.** Every assembled item now carries its own coverage — through
+the engine and out the MCP tool — and the outcome is still judged from the
+first item's, now as a recorded decision rather than an accident of
+wording. U-44's known-shape fix had two halves. *Publish confidence per
+item* is adopted: it costs nothing, and a consumer who knows what the words
+mean can see when the second item covers more of the question than the
+first. *Judge the best coverage among assembled items* is refused, on the
+table it was proposed to be measured against.
+
+**Why "best" is refused.** On the self-corpus it changes nothing at all —
+no question's best-of-three crosses a bar its first item misses. On the
+proposals corpus it would flip three shortfalls to passes and one honest
+abstention to the suite's costliest failure: the record that covers 1.00 of
+"what is the maximum size of an uploaded distribution" is the corpus's
+longest document, which answers questions about signing and not about
+sizes. Coverage asks whether a record holds the question's words, and the
+longest document holds the most words: judging the best coverage among
+items manufactures confidence out of document length. Worse, two of the
+three flips it buys are coincidence passes — the coverage crossing the bar
+belongs to a *wrong* record while the right one sits adjacent — and
+nothing mechanical separates the one legitimate case (P-12, whose own
+record covers 0.71 at rank three) from the bluff (a wrong record covering
+1.00 at rank two). The bluff covers more. Third refusal in this lineage
+(D-0028, D-0042), each on a better instrument.
+
+**What was corrected on the way.** `Retrieved::coverage` had documented
+itself as "the best item" while the code read the first — the same
+contract-against-code gap the gap channel had (U-42), found the same way.
+The doc now states the measured rule and the reason; a test pins the
+inversion case, built so the first item ranks on term density while the
+second covers more.
+
+**What this deliberately does not do.** It does not weigh per-item coverage
+into ranking or outcome — that weighing takes meaning, which is U-23's
+model half and the review trigger above. And the length bias it exposed in
+coverage itself is recorded with U-39, where the other length effects live.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

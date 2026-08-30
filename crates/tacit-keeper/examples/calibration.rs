@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("\n\x1b[1m{}\x1b[0m", corpus.name.to_uppercase());
         println!(
-            "  {:<5} {:<7} {:<15} {:>5} {:>5} {:>6} {:>7}  top",
+            "  {:<5} {:<7} {:<15} {:>5} {:>5} {:>6} {:>7}  assembled top three as anchor(coverage)",
             "id", "expect", "verdict", "cov", "reach", "ratio", "margin"
         );
         for graded in &card.graded {
@@ -92,6 +92,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (lexical, _) = retriever.candidates(&Query::text(&question.question));
             let margin = margin(&corpus.ledger, &lexical);
             let ratio = if graded.known > 0.0 { graded.coverage / graded.known } else { 0.0 };
+            // Coverage per assembled item (U-44): the outcome is read from
+            // the first of these, and whether a later item covers more —
+            // or crosses the bar the first one misses — is the measurement
+            // that decides what, if anything, that rule should become.
+            let top: Vec<String> = found
+                .items
+                .iter()
+                .take(3)
+                .map(|item| {
+                    format!(
+                        "{}({:.2})",
+                        anchor(&corpus.ledger, item.record.id()).unwrap_or_default(),
+                        item.coverage
+                    )
+                })
+                .collect();
             println!(
                 "  {:<5} {:<7} {:<15} {:>5.2} {:>5.2} {:>6.2} {:>7}  {}",
                 question.id,
@@ -104,11 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 graded.known,
                 ratio,
                 margin.map(|m| format!("{m:.2}")).unwrap_or_else(|| "solo".into()),
-                found
-                    .items
-                    .first()
-                    .map(|i| anchor(&corpus.ledger, i.record.id()).unwrap_or_default())
-                    .unwrap_or_default(),
+                top.join(" "),
             );
         }
     }

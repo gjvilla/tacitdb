@@ -80,6 +80,12 @@ pub struct SearchItem {
     /// rather than the whole record — the budget assembles k answers, not one
     /// document (U-43). Fetch the record by id for the full text.
     pub excerpted: bool,
+    /// How much of the question's discriminating weight this record covers,
+    /// 0 to 1. The overall outcome is judged from the first item's coverage;
+    /// a later item covering more is worth your attention, and deciding that
+    /// takes knowing what the words mean, which is why it is published per
+    /// item rather than decided for you (U-44).
+    pub coverage: f64,
     #[serde(flatten)]
     pub record: RecordOut,
 }
@@ -246,6 +252,7 @@ impl TacitServer {
                         }
                         SearchItem {
                             relevance: (item.relevance * 100.0).round() / 100.0,
+                            coverage: (item.coverage * 100.0).round() / 100.0,
                             via: match &item.via {
                                 tacit_core::Via::Lexical => "lexical".to_string(),
                                 tacit_core::Via::Vector => "vector".to_string(),
