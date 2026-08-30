@@ -1790,6 +1790,68 @@ corpus, not yet an outside examiner.
 
 ---
 
+## D-0040 · First place is evidence: the fusion default, and two corrections
+
+```yaml
+id: D-0040
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: the U-41 repair, run as the register asked — swept over both suites
+  before being believed
+evidence: [docs/REGISTER.md, docs/GOLDEN.md, docs/PEP-GOLDEN.md,
+  crates/tacit-keeper/examples/fusion_sweep.rs]
+review_trigger: when a third ranker joins the plan, or when the embedder stops
+  being a hashing one — both change what a first place is worth; and when U-43
+  moves, which decides whether rank information below first place can reach a
+  consumer at all
+```
+
+**Assertion.** The default fusion is reciprocal rank with `k = 0`, and the
+zero is a statement rather than a tuning: with two rankers, first place in
+either list is evidence and depth is not. The literature's k=60 blunts every
+list's top across a large ensemble; with exactly two rankers it inverts the
+evidence — a record held at rank 0 by a score margin rank fusion never sees
+loses to a record at ranks 1 and 2, because 1/61 < 1/62 + 1/63. Zero is the
+only value in the family where a first place beats a middling pair, and k=1
+already re-inverts that case (it passed the sweep on a lucky vector rank).
+Swept over both suites: k ≤ 10 recovers G-07 and moves nothing else anywhere;
+score-normalized fusion was measured and refused — it costs every question
+the vector ranker earns on the proposals corpus. The served plan no longer
+loses to lexical-only on the self-corpus (17/21 both) and keeps the vector
+ranker's four rescues on the proposals corpus (16/24 against 12/24).
+
+**The register was wrong twice, and the instrument said so.** Yesterday's
+U-41 entry filed G-10 as fusion's casualty via "the gap channel reads the
+same fused candidates." It does not — the gap channel has its own ranking,
+and it ranked by `coverage.max(closeness)`, which let three gaps sharing no
+words with the question outrank the one gap covering it, on the strength of
+a similarity this engine elsewhere refuses to let confer confidence. That is
+U-42, registered and resolved today: coverage ranks, closeness only opens
+the door and breaks ties — the same asymmetry the answer path already gives
+similarity. G-10 recovered. And P-12, U-41's founding evidence, was not
+fusion's casualty either: under the new default its answer sits at fused
+rank 2, inside the grading window, and the assembled result still holds one
+record — the 4,000-token budget assembles a single 3,700-token document, so
+rank information below first place exists in the plan and cannot reach a
+consumer. That is U-43, open: on a long-document corpus the token budget,
+not the ranker, decides how many answers exist, and the suite's rank-3
+window grades a door the budget has already closed. P-12 is re-filed there.
+`explain` printed the truncated assembly as "fused" until this — it now
+shows fused order and assembly separately, because an instrument that
+conflates them is how both misfilings survived a day.
+
+**What this deliberately does not do.** It does not touch the confidence
+rule (U-38 stands, margin clause and all), does not resolve the two-champion
+case (a wrong record leading each list is a ranking fault, not a fusion
+one), and does not raise the token budget — U-43 interacts with U-39's "a
+repair worth the name would change how a record is indexed", and widening
+the window before deciding how long documents should be indexed would be
+tuning the symptom.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

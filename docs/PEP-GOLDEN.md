@@ -80,9 +80,12 @@ does not explain them) is the rule here from day one.
   admits promoted claims only: absent from both rankers' candidates by
   design. A fair question about a refusal cannot currently be answered at all
   (U-40, registered by this measurement).
-- **P-12** — the answer sits at lexical rank 1 *and* vector rank 2, and the
-  assembled result holds one record that is neither: fusion loses what both
-  rankers found (U-41, registered by this measurement).
+- **P-12** — first filed as fusion losing what both rankers found (U-41),
+  and the resolution of that row corrected this one: under the k=0 default
+  the answer sits at fused rank 2, inside the grading window, and the
+  4,000-token budget assembles exactly one 3,700-token document — 37 of 38
+  fused items cut. The ranker found it; the budget closed the door (U-43,
+  registered by this measurement).
 - **P-22** — bluffs at coverage = reach = 1.00; the corpus speaks every word
   of the question and does not settle it. The lexical margin over the
   runner-up is 1.6%, which is the first outside-corpus evidence that the
@@ -104,7 +107,7 @@ does not explain them) is the rule here from day one.
 | P-09 | how can license terms be stated precisely in package metadata | answer PEP-0639 (pending U-23) | Greg Villa | if the slice repins |
 | P-10 | what stops pip writing into an operating system owned environment | answer PEP-0668 | Greg Villa | if the slice repins |
 | P-11 | how can an index expose a wheel's metadata without serving the whole archive | answer PEP-0658 | Greg Villa | if the slice repins |
-| P-12 | what file format records pinned dependencies for reproducible installs | answer PEP-0751 (pending U-41) | Greg Villa | if the slice repins; the rejected twin is the trap |
+| P-12 | what file format records pinned dependencies for reproducible installs | answer PEP-0751 (pending U-43) | Greg Villa | if the slice repins; the rejected twin is the trap |
 | P-13 | which platform tag covers portable linux binaries | answer PEP-0600 | Greg Villa | if the slice repins; three retired predecessors are the trap |
 | P-14 | who can take over an abandoned project name on the index | answer PEP-0541 | Greg Villa | if the slice repins |
 | P-15 | how are the names of optional extras normalised | answer PEP-0685 | Greg Villa | if the slice repins |

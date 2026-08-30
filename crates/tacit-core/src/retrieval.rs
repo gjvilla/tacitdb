@@ -270,13 +270,31 @@ pub enum Probe {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fusion {
     Rrf { k: f64 },
-    /// One weight per ranking, applied to normalized scores.
+    /// One weight per ranking, applied to normalized scores. Measured on both
+    /// suites 2026-08-30 and refused as a default: normalizing lets the
+    /// sharper-scored ranker swamp the other, which cost every question the
+    /// vector ranker was earning.
     Weighted(Vec<f64>),
 }
 
 impl Default for Fusion {
+    /// `k = 0`, and the zero is a statement, not a tuning (U-41, D-0040).
+    ///
+    /// The literature's k=60 exists to blunt any single ranking's top ranks
+    /// across a large ensemble. With exactly two rankers it inverts the
+    /// evidence: at k=60 a record at rank 0 of one list — held there by a
+    /// score margin rank fusion never sees — loses to a record at ranks 1 and
+    /// 2, because 1/61 < 1/62 + 1/63. Zero is the only value in the family
+    /// where a first place beats a middling pair (1 > 1/2 + 1/3): first place
+    /// is treated as evidence and depth is not, which matches what was
+    /// measured of both rankers here — the lexical top is precise, the vector
+    /// top rescues spellings and paraphrase, and both tails are noise.
+    /// Swept over both suites before being believed: k ≤ 10 recovers a
+    /// champion the old default lost and moves nothing else; k = 0 is chosen
+    /// because k = 1 already re-inverts the champion case and passed the
+    /// suite only by a lucky vector rank.
     fn default() -> Self {
-        Fusion::Rrf { k: 60.0 }
+        Fusion::Rrf { k: 0.0 }
     }
 }
 
@@ -1059,7 +1077,7 @@ impl<'a> Retriever<'a> {
         // to raise.
         let gap_coverage = query.min_coverage * GAP_COVERAGE_RATIO;
         let closeness: BTreeMap<RecordId, f64> = vector.iter().copied().collect();
-        let mut scored: Vec<(f64, &'a Record)> = Vec::new();
+        let mut scored: Vec<(f64, f64, &'a Record)> = Vec::new();
         let ids: BTreeSet<RecordId> = candidates
             .ranked
             .iter()
@@ -1075,11 +1093,18 @@ impl<'a> Retriever<'a> {
             }
             let Some(record) = self.ledger.record(id) else { continue };
             if matches!(record.content(), Content::Gap(_)) {
-                scored.push((coverage.max(close), record));
+                scored.push((coverage, close, record));
             }
         }
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-        gaps.extend(scored.into_iter().take(query.gap_budget).map(|(_, r)| r));
+        // Coverage ranks; closeness only lets a gap in the door and breaks
+        // ties. This order *is* the stated rule two comments up — the first
+        // version ranked by `coverage.max(close)`, which let three gaps
+        // sharing no words with the question outrank the one gap covering it,
+        // on the strength of a similarity this file elsewhere refuses to let
+        // confer confidence (U-42, found by G-10 with the budget at three and
+        // the covering gap at rank four).
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.1.total_cmp(&a.1)));
+        gaps.extend(scored.into_iter().take(query.gap_budget).map(|(_, _, r)| r));
         gaps
     }
 
@@ -1673,6 +1698,44 @@ mod tests {
         assert_eq!(fused.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![a, b]);
     }
 
+    /// U-41's champion case, pinned. A record one ranker holds at first place
+    /// must beat a record both rankers hold at middling ranks — at k=60 it
+    /// loses (1/61 < 1/62 + 1/63), which is how three measured questions were
+    /// decided by depth over decisiveness.
+    #[test]
+    fn a_first_place_in_one_ranking_beats_a_middling_pair() {
+        let mut ledger = Ledger::new();
+        let e = ledger.add_entity("x", "x").unwrap();
+        let champion = ledger.append(prose(e, "alpha", Author::human("M"))).unwrap();
+        let middling = ledger.append(prose(e, "beta", Author::human("M"))).unwrap();
+        let third = ledger.append(prose(e, "gamma", Author::human("M"))).unwrap();
+
+        // The champion leads the first list by a wide margin and is absent
+        // from the second; the middling record sits at ranks 1 and 1. What is
+        // *not* asserted: that the champion beats the second list's own first
+        // place — a first place there is equally strong evidence, and honoring
+        // it is what lets vector candidates rescue spellings (P-01, P-15).
+        let lexical = vec![(champion, 9.0), (middling, 4.0), (third, 3.9)];
+        let vector = vec![(third, 0.6), (middling, 0.55)];
+
+        let position = |fused: &[(RecordId, f64)], id: RecordId| {
+            fused.iter().position(|(f, _)| *f == id).expect("present")
+        };
+        let fused = fuse(&[lexical.clone(), vector.clone()], &Fusion::default());
+        assert!(
+            position(&fused, champion) < position(&fused, middling),
+            "first place is evidence; depth is not"
+        );
+
+        // The inversion the old default carried, kept as documentation: this
+        // is measured behaviour, not a hypothetical.
+        let old = fuse(&[lexical, vector], &Fusion::Rrf { k: 60.0 });
+        assert!(
+            position(&old, middling) < position(&old, champion),
+            "k=60 prefers the middling pair"
+        );
+    }
+
     #[test]
     fn state_changes_show_up_without_reindexing() {
         let (mut ledger, torque, _) = setup();
@@ -1765,6 +1828,55 @@ mod vector_tests {
         assert!(!hybrid.items.is_empty(), "the vector ranker bridges the spelling");
         assert!(matches!(hybrid.items[0].via, Via::Vector | Via::Hybrid));
         assert!(hybrid.items[0].similarity > 0.0);
+    }
+
+    /// U-42, held down as a test: the gap that covers the question outranks a
+    /// gap the embedder merely thinks is nearby. Closeness opens the door and
+    /// breaks ties; it never decides the order — the same asymmetry the
+    /// answer path already gives similarity, arrived at the same way: G-10's
+    /// covering gap sat at rank four behind three gaps sharing no words with
+    /// the question, and the budget of three cut it.
+    #[test]
+    fn gap_offers_rank_by_coverage_not_similarity() {
+        let (mut ledger, subject) = fixture();
+        let covering = ledger
+            .append(Draft::new(
+                Author::agent("assistant"),
+                SourceRef::channel("chat"),
+                Content::Gap(crate::content::GapContent {
+                    question: "which permissive license the engine ships under".into(),
+                    territory: vec![subject],
+                }),
+            ))
+            .unwrap();
+        // Shares character shapes with the query (the hashing embedder reads
+        // trigrams) and none of its tokens.
+        ledger
+            .append(Draft::new(
+                Author::agent("assistant"),
+                SourceRef::channel("chat"),
+                Content::Gap(crate::content::GapContent {
+                    question: "licensing permissions shipping engineering".into(),
+                    territory: vec![subject],
+                }),
+            ))
+            .unwrap();
+
+        let projection = Projection::rebuild(&ledger);
+        let index = TextIndex::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let vectors = crate::embedding::VectorIndex::rebuild(&ledger, &embedder);
+        let mut query = Query::text("which license does the engine ship under");
+        query.gap_budget = 1;
+        let found = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&vectors, &embedder)
+            .retrieve(&query);
+        assert_eq!(
+            found.gaps.first().map(|g| g.id()),
+            Some(covering),
+            "the budget's one slot goes to the gap that covers the question"
+        );
     }
 
     /// The measured decision, held down as a test: similarity does not confer

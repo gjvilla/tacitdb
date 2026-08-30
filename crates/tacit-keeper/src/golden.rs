@@ -453,6 +453,21 @@ pub fn run_with(
     vectors: Option<(&VectorIndex, &dyn Embedder)>,
     questions: &[GoldenQuestion],
 ) -> Scorecard {
+    run_fused(ledger, projection, index, vectors, questions, &tacit_core::Fusion::default())
+}
+
+/// Grade under a specific fusion plan. The instrument U-41 asked for: a fusion
+/// change is believed when this has run over *both* suites, because the same
+/// fusion was measured earning questions on one corpus and costing them on the
+/// other.
+pub fn run_fused(
+    ledger: &Ledger,
+    projection: &Projection,
+    index: &TextIndex,
+    vectors: Option<(&VectorIndex, &dyn Embedder)>,
+    questions: &[GoldenQuestion],
+    fusion: &tacit_core::Fusion,
+) -> Scorecard {
     let retriever = index.retriever(ledger, projection, ViewSpec::now());
     let retriever = match vectors {
         Some((index, embedder)) => retriever.with_vectors(index, embedder),
@@ -461,7 +476,9 @@ pub fn run_with(
     let graded = questions
         .iter()
         .map(|question| {
-            let found = retriever.retrieve(&Query::text(&question.question));
+            let mut query = Query::text(&question.question);
+            query.fusion = fusion.clone();
+            let found = retriever.retrieve(&query);
             grade(ledger, question, &found)
         })
         .collect();

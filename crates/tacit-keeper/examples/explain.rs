@@ -107,18 +107,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .join(" ")
             );
         }
+        // Fused order and assembled items are different lists: the token
+        // budget can cut assembly to a single document on a long-document
+        // corpus, and this instrument printed the truncated list as "fused"
+        // until the difference decided a question (P-12: fused rank 2,
+        // assembled length 1, graded as never surfaced).
+        let rankings: Vec<Vec<(RecordId, f64)>> = if vector.is_empty() {
+            vec![lexical.clone()]
+        } else {
+            vec![lexical.clone(), vector.clone()]
+        };
+        let fused = tacit_core::fuse(&rankings, &query.fusion);
+        println!("  fused:   {}", rank_line(&ledger, &fused, &wanted));
         println!(
-            "  fused:   {}",
-            found
-                .items
-                .iter()
-                .take(4)
-                .map(|i| format!("{}({:.1})", anchor(&ledger, i.record), i.relevance))
-                .collect::<Vec<_>>()
-                .join(" ")
+            "  items:   {} assembled, {} cut by the budget",
+            found.items.len(),
+            found.truncated
         );
         println!("  lexical: {}", rank_line(&ledger, &lexical, &wanted));
         println!("  vector:  {}", rank_line(&ledger, &vector, &wanted));
+        // The gap channel has its own ranking (coverage.max(closeness), not
+        // fused order — a distinction this instrument exists to keep honest,
+        // having once been misfiled in the register within a day of looking).
+        if !found.gaps.is_empty() {
+            println!(
+                "  gaps:    {}",
+                found
+                    .gaps
+                    .iter()
+                    .map(|g| anchor(&ledger, g))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
         // A term the corpus has never seen is the difference between "this
         // record answered badly" and "nothing here could have answered".
         println!(
