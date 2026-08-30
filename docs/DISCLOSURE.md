@@ -5,9 +5,10 @@ project is, what it contains, what it deliberately does not contain, and how
 that has been enforced — together with the facts that cut the other way, because
 a summary that only helped its author would not be worth showing anyone.
 
-**It states facts and asks a question. It makes no legal claim and is not legal
-advice.** The question at the end is for a lawyer and for my employer, and the
-register tracks it as U-7.
+**It states facts. It makes no legal claim and is not legal advice.** It was
+written to ask one question — for a lawyer and for my employer — and that
+question closed on 2026-08-29. The page now records how, under *How the question
+closed* below. The register tracks it as U-7.
 
 ---
 
@@ -16,7 +17,7 @@ register tracks it as U-7.
 An engine for organizational memory: a small database that stores assertions
 with their provenance and refuses to let anything become *promoted* knowledge
 without a human verdict. About fifteen thousand lines of Rust across four crates,
-of which a large share is its own test suite — 194 tests — plus its own decision
+of which a large share is its own test suite — 208 tests — plus its own decision
 records. There is no product, no revenue, no user, and no
 deployment. Its only corpus is its own documentation, plus a generator that
 makes a synthetic one.
@@ -47,24 +48,29 @@ it.
 
 ## When it was made
 
-Twenty commits over two days: one on Sunday 2026-08-23 and nineteen on Monday
-2026-08-24.
+Twenty-four commits over four days: one on Sunday 2026-08-23, twenty on Monday
+2026-08-24, two on Tuesday 2026-08-25, and one on Saturday 2026-08-29 — the
+last being D-0038, which closed the question this page was written to ask.
 
 ## The facts that cut the other way
 
 Two, both found by the project's own checks on 2026-08-24 and recorded rather
 than tidied:
 
-1. **Every commit is authored, committed and cryptographically signed under my
-   employer email address.** The repository's own record therefore attributes all
+1. **Every commit was authored, committed and cryptographically signed under my
+   employer email address.** The repository's own record therefore attributed all
    of this work to an employer identity, which is exactly what the decision
    record above denies. The boundary check had been reading the files and never
-   the commits. It reads both now, and it is currently red.
+   the commits. It reads both now — red on the day this fact was recorded, green
+   since the correction described below.
 
 2. **Almost all of the commit timestamps fall on a weekday afternoon** — nineteen
-   of twenty between 13:00 and 19:00 local on a Monday, one on a Sunday
-   afternoon. What that means depends on facts about my working arrangements
-   that are not in this repository.
+   of the twenty commits that existed on 2026-08-24 between 13:00 and 19:00 local
+   on a Monday, one on a Sunday afternoon. Of the twenty-four now in the record,
+   twenty are that Monday afternoon; the four added since are two on a Tuesday
+   morning and two on weekend afternoons. This fact still stands, because the
+   timestamps were never altered. What it means depends on facts about my working
+   arrangements that are not in this repository.
 
 While the question was open, neither was altered: rewriting the authorship
 record of a project whose ownership is an open question would have been tidying

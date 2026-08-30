@@ -1478,6 +1478,16 @@ review_trigger: when U-7 resolves, or when a second person commits to this
   repository
 ```
 
+**Overtaken in part by D-0038, 2026-08-29.** The review trigger above fired: U-7
+resolved on a fact, and there is no invention-assignment clause to reach this
+project. What that lifted is this record's refusal to rewrite history — a refusal
+conditional on ownership being the open question, not an absolute one — and the
+authorship record has since been restamped, with the pre-rewrite history
+preserved in a mirror clone. The rest stands as written: both facts below, the
+reason the check reads commit identity at all, and the split between failing on
+what is changeable and reporting what is not. This record is not edited to match;
+D-0038 says what changed and why.
+
 **Assertion.** D-0010's boundary covers the record of who made this work, not
 only the text of it. `scripts/check-boundary.sh` now reads the commit identity
 as well as the files: it fails on the identity the *next* commit would carry, and

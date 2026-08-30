@@ -10,6 +10,7 @@ use tacit_core::{
     VectorIndex, Via, ViewSpec,
 };
 use tacit_keeper::corpus::{DECISION_KIND, ingest_corpus};
+use tacit_keeper::golden::{parse_golden, run as run_golden};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -410,8 +411,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  record's boundary\": docs/GOLDEN.md, run with");
     println!("    cargo run -p tacit-keeper --example golden");
     println!("  It scores abstention as a pass and names the room each failure came from.");
-    println!("  Today: 11/14, four of those passes earned by declining to answer, and");
-    println!("  three known shortfalls tracked against U-23 rather than hidden.");
+    // Graded here rather than quoted, because a score written into a println is
+    // exactly the drift D-0037 turns the suite red for.
+    match std::fs::read_to_string(repo_root.join("docs/GOLDEN.md"))
+        .map_err(|e| e.to_string())
+        .and_then(|text| parse_golden(&text).map_err(|e| e.to_string()))
+    {
+        Ok(questions) => {
+            let card = run_golden(&ledger, &projection_for_search, &index, &questions);
+            println!(
+                "  Today: {}/{}, {} of those passes earned by declining to answer, and",
+                card.passed(),
+                card.graded.len(),
+                card.abstentions_rewarded()
+            );
+            println!(
+                "  {} known shortfalls tracked against a registered unknown rather than hidden.",
+                card.known_shortfalls().len()
+            );
+        }
+        Err(error) => println!("  Today: could not grade the suite ({error})."),
+    }
     println!();
     println!("  Scored honestly: (a) durable, re-validated, and current, with the document");
     println!("  deliberately upstream and U-29 the price of that; (b) capability met;");
