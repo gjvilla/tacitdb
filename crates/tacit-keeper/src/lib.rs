@@ -9,6 +9,7 @@ pub mod corpus;
 pub mod golden;
 pub mod origin;
 pub mod parse;
+pub mod pep;
 pub mod register;
 pub mod synthetic;
 
@@ -24,5 +25,6 @@ pub use golden::{
     stale_triggers, vocabulary_drift,
 };
 pub use parse::{ParseError, ParsedRecord, parse_corpus};
+pub use pep::{PROPOSAL_KIND, Pep, PepError, PepReport, REQUIRES, Status, ingest_peps, parse_pep};
 pub use register::{ParsedUnknown, Resolution, parse_register};
 pub use synthetic::{Corpus, Shape, Topic, generate};
