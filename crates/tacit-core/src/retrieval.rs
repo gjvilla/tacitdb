@@ -106,14 +106,32 @@ pub fn indexable_text(record: &Record) -> Option<String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Posting {
     record: RecordId,
+    /// Which passage of the record this posting counts within. A record is
+    /// indexed passage by passage (U-39, D-0044), so a term's frequency is
+    /// local to the window that holds it rather than diluted across a
+    /// document three thousand tokens long.
+    passage: u32,
     term_frequency: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DocStats {
-    length: u32,
+    /// Token length of each passage, in order.
+    lengths: Vec<u32>,
     entities: Vec<EntityId>,
 }
+
+/// Tokens per indexed passage — and the default is *no limit*: a record is
+/// one passage, scored whole. Passage indexing was built as U-39's predicted
+/// repair, swept over both suites at six sizes, and lost or tied at every
+/// one of them (D-0044): scoring a record as its best window makes titles
+/// and bodies compete at comparable lengths, but a window's *coverage*
+/// understates every record whose answer is spread across its document, and
+/// that cost exceeded the gain on both corpora. The machinery stays, switched
+/// off, exactly as the approximate vector index did (U-26): the refusal is
+/// corpus-relative, `with_passage_tokens` is the door, and the indexing_sweep
+/// example is the instrument that reopens the question.
+const PASSAGE_TOKENS: usize = usize::MAX;
 
 /// An inverted index over record content. A fold over the log carrying no view
 /// parameters, exactly like [`Projection`] and for the same reason: nothing is
@@ -124,7 +142,11 @@ pub struct TextIndex {
     applied: usize,
     postings: BTreeMap<String, Vec<Posting>>,
     docs: BTreeMap<RecordId, DocStats>,
+    /// Number of indexed passages — the `N` of every collection statistic
+    /// here, because the scored unit is the passage.
+    passages: usize,
     total_length: u64,
+    passage_tokens: usize,
 }
 
 impl Default for TextIndex {
@@ -139,8 +161,20 @@ impl TextIndex {
             applied: 0,
             postings: BTreeMap::new(),
             docs: BTreeMap::new(),
+            passages: 0,
             total_length: 0,
+            passage_tokens: PASSAGE_TOKENS,
         }
+    }
+
+    /// An empty index with another passage size — the sweep instrument's
+    /// entry point, and a caller's if their prose runs longer than ours.
+    /// Must be set before the first `advance`: an index is one fold, and
+    /// re-slicing what was already folded would break rebuild equivalence.
+    pub fn with_passage_tokens(mut self, tokens: usize) -> Self {
+        debug_assert_eq!(self.applied, 0, "passage size is fixed at the first fold");
+        self.passage_tokens = tokens.max(1);
+        self
     }
 
     pub fn rebuild(ledger: &Ledger) -> Self {
@@ -170,15 +204,21 @@ impl TextIndex {
             return;
         }
 
-        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-        for token in &tokens {
-            *counts.entry(token.clone()).or_default() += 1;
-        }
-        for (term, term_frequency) in counts {
-            self.postings
-                .entry(term)
-                .or_default()
-                .push(Posting { record: record.id(), term_frequency });
+        let mut lengths: Vec<u32> = Vec::new();
+        for (passage, window) in tokens.chunks(self.passage_tokens).enumerate() {
+            let mut counts: BTreeMap<&String, u32> = BTreeMap::new();
+            for token in window {
+                *counts.entry(token).or_default() += 1;
+            }
+            for (term, term_frequency) in counts {
+                self.postings.entry(term.clone()).or_default().push(Posting {
+                    record: record.id(),
+                    passage: passage as u32,
+                    term_frequency,
+                });
+            }
+            lengths.push(window.len() as u32);
+            self.passages += 1;
         }
 
         let entities = match record.content() {
@@ -187,7 +227,7 @@ impl TextIndex {
             _ => Vec::new(),
         };
         self.total_length += tokens.len() as u64;
-        self.docs.insert(record.id(), DocStats { length: tokens.len() as u32, entities });
+        self.docs.insert(record.id(), DocStats { lengths, entities });
     }
 
     #[doc(hidden)]
@@ -195,8 +235,9 @@ impl TextIndex {
         self.postings.get(term).map(|p| p.len())
     }
 
+    /// Indexed passages — the scored unit, of which a long record has many.
     pub fn documents(&self) -> usize {
-        self.docs.len()
+        self.passages
     }
 
     pub fn applied(&self) -> usize {
@@ -204,10 +245,10 @@ impl TextIndex {
     }
 
     fn average_length(&self) -> f64 {
-        if self.docs.is_empty() {
+        if self.passages == 0 {
             return 0.0;
         }
-        self.total_length as f64 / self.docs.len() as f64
+        self.total_length as f64 / self.passages as f64
     }
 
     /// Pair the index with a ledger, a projection and a view.
@@ -901,7 +942,7 @@ impl<'a> Retriever<'a> {
             .into_iter()
             .filter(|t| !stopwords.contains(t))
             .collect();
-        let n = self.index.docs.len() as f64;
+        let n = self.index.passages as f64;
         let avgdl = self.index.average_length();
         if terms.is_empty() || n == 0.0 || avgdl == 0.0 {
             return Candidates::default();
@@ -912,7 +953,7 @@ impl<'a> Retriever<'a> {
         // standard BM25 negative-IDF cutoff, and without it "the" and "does"
         // decide the ranking. Skipped on a corpus too small for the statistic
         // to mean anything.
-        let prunable = self.index.docs.len() >= DF_PRUNE_MIN_DOCS;
+        let prunable = self.index.passages >= DF_PRUNE_MIN_DOCS;
         let discriminating: Vec<&String> = terms
             .iter()
             .filter(|term| {
@@ -929,8 +970,8 @@ impl<'a> Retriever<'a> {
         }
 
 
-        let mut scores: BTreeMap<RecordId, f64> = BTreeMap::new();
-        let mut matched_idf: BTreeMap<RecordId, f64> = BTreeMap::new();
+        let mut scores: BTreeMap<(RecordId, u32), f64> = BTreeMap::new();
+        let mut matched: BTreeMap<(RecordId, u32), f64> = BTreeMap::new();
         let mut total_idf = 0.0;
         let mut missing_idf = 0.0;
         let mut read_as: Vec<(String, String)> = Vec::new();
@@ -980,14 +1021,38 @@ impl<'a> Retriever<'a> {
                     continue;
                 }
                 let tf = f64::from(posting.term_frequency);
-                let norm = 1.0 - BM25_B + BM25_B * f64::from(stats.length) / avgdl;
+                let length = stats
+                    .lengths
+                    .get(posting.passage as usize)
+                    .copied()
+                    .unwrap_or(0);
+                let norm = 1.0 - BM25_B + BM25_B * f64::from(length) / avgdl;
                 let contribution = idf * (tf * (BM25_K1 + 1.0)) / (tf + BM25_K1 * norm);
-                *scores.entry(posting.record).or_default() += contribution;
-                *matched_idf.entry(posting.record).or_default() += idf;
+                *scores.entry((posting.record, posting.passage)).or_default() += contribution;
+                *matched.entry((posting.record, posting.passage)).or_default() += idf;
             }
         }
 
-        let mut ranked: Vec<(RecordId, f64)> = scores.into_iter().collect();
+        // A record answers as its best passage (U-39, D-0044): the score and
+        // the coverage both come from the one window that won, because a
+        // confidence number stitched from several windows would describe a
+        // document nobody reads — that is how a long record covered all of a
+        // question it never answers (D-0043), and passage-local coverage is
+        // what closes that door.
+        let mut best: BTreeMap<RecordId, (f64, f64)> = BTreeMap::new();
+        for ((record, passage), score) in scores {
+            let covered = matched.get(&(record, passage)).copied().unwrap_or(0.0);
+            let entry = best.entry(record).or_insert((score, covered));
+            if score > entry.0 {
+                *entry = (score, covered);
+            }
+        }
+        let mut matched_idf: BTreeMap<RecordId, f64> = BTreeMap::new();
+        let mut ranked: Vec<(RecordId, f64)> = Vec::new();
+        for (record, (score, covered)) in best {
+            matched_idf.insert(record, covered);
+            ranked.push((record, score));
+        }
         // Ties break on log order, so results are stable across runs.
         ranked.sort_by(|a, b| {
             b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
@@ -1930,6 +1995,26 @@ mod tests {
             found.coverage, found.items[0].coverage,
             "the outcome reads the first item, deliberately"
         );
+    }
+
+    /// U-39's predicted repair, held down in its measured position: available
+    /// and off. A passage-sized index splits long records into more documents
+    /// than records; the default scores each record whole, byte-for-byte the
+    /// behaviour the sweep chose (D-0044).
+    #[test]
+    fn passage_indexing_is_available_and_not_the_default() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("topic", "t").unwrap();
+        let long = format!("word {}", "filler ".repeat(600));
+        let id = ledger.append(prose(subject, &long, Author::human("M"))).unwrap();
+        ledger.append(promote(id)).unwrap();
+
+        let whole = TextIndex::rebuild(&ledger);
+        assert_eq!(whole.documents(), 1, "the default is one passage per record");
+
+        let mut sliced = TextIndex::empty().with_passage_tokens(200);
+        sliced.advance(&ledger);
+        assert!(sliced.documents() > 3, "the door stays open for a caller who wants it");
     }
 
     /// U-43, held down: the budget assembles k answers, not one document.

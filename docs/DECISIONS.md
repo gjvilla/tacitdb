@@ -2015,6 +2015,64 @@ coverage itself is recorded with U-39, where the other length effects live.
 
 ---
 
+## D-0044 · The length constant stopped mattering, and the predicted repair is built, measured, and off
+
+```yaml
+id: D-0044
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: resolution of U-39 — the sweep its trigger demanded, rerun on both
+  corpora, and the repair its row predicted, built and swept against them
+evidence: [docs/REGISTER.md, crates/tacit-core/src/retrieval.rs,
+  crates/tacit-keeper/examples/indexing_sweep.rs]
+review_trigger: if either suite's sweep stops being flat in BM25_B, or a
+  corpus arrives whose documents dwarf even the proposals'; any move on
+  passage size starts from the indexing_sweep table
+```
+
+**Assertion.** BM25_B stays at 0.75 and a record is indexed whole, and both
+are now measured positions rather than defaults. The sweep U-39's trigger
+demanded came back flat: on the self-corpus every value of B from 0.00 to
+1.00 scores 17/21, and on the proposals corpus every value from 0.25 up
+scores 19/24. The one-for-one trade recorded on 2026-08-29 — G-09 bought at
+G-07's expense — is gone, and nothing about B changed. What changed was
+fusion (D-0040) and assembly (D-0041): the constant was never the fault, it
+was the visible dial on a fault that lived two stages away. U-39's central
+sentence — the constant selects which kind of question can be answered — was
+true of the engine that existed when it was written and is not true of the
+engine that exists now.
+
+**The predicted repair, built and refused.** The row said a repair worth the
+name would change how a record is indexed, so it was changed: passage
+indexing, each record scored as its best window, title and body competing at
+comparable lengths. Swept at six sizes over both corpora, it loses or ties
+everywhere — 15 to 17 against 17 on the self-corpus, 13 to 18 against 19 on
+the proposals. The mechanism of the loss is the mirror of D-0043's: a
+window's coverage understates every record whose answer is spread across its
+document, so four questions whose answers legitimately cover the question at
+document scale fell underconfident. Coverage's two length failure modes are
+now both measured and in tension — the whole document overstates the longest
+record, the window understates the spread answer — and every rule proposed
+over either has been refused, which is D-0043's publish-and-do-not-decide
+holding from the other side.
+
+**Kept, switched off.** The passage machinery stays in the index behind
+`with_passage_tokens`, exactly as the approximate vector index stayed behind
+its own door (U-26, D-0032): the refusal is corpus-relative, the sweep is a
+permanent instrument, and a corpus of book-length documents can reopen the
+question by running it. A test pins the default as whole-record and the door
+as open.
+
+**What this leaves standing.** G-09 still loses to two title claims — a real
+loss, now a question-level ranking fault that no length constant reaches,
+filed where it always belonged: with meaning (U-23). And the skew numbers
+stay true (titles of 7 tokens against bodies of 3,683); what fell was only
+the claim that a constant, or a re-slicing, was the fix.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
