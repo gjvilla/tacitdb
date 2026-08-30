@@ -20,19 +20,43 @@ use tacit_core::{
     VectorIndex, ViewSpec, indexable_text, tokenize,
 };
 use tacit_keeper::corpus::ingest_corpus;
-use tacit_keeper::golden::{Expectation, parse_golden};
+use tacit_keeper::golden::{Expectation, parse_golden, parse_golden_rows};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let only: Vec<String> = std::env::args().skip(1).collect();
+    // `--proposals` explains the P-suite over the pinned slice instead of the
+    // self-hosting corpus — same instrument, other ledger. The register's
+    // lesson stands for both: a failure filed under an unmeasured cause is
+    // what this exists to prevent.
+    let mut only: Vec<String> = std::env::args().skip(1).collect();
+    let proposals = only.iter().any(|a| a == "--proposals");
+    only.retain(|a| a != "--proposals");
 
     let mut ledger = Ledger::new();
-    ingest_corpus(&mut ledger, &repo)?;
+    let questions = if proposals {
+        let dir = repo.join("target/proposals");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(|e| format!("no corpus at {} ({e}) — run scripts/fetch-proposals.sh", dir.display()))?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "rst" || e == "txt"))
+            .collect();
+        files.sort();
+        let mut peps = Vec::new();
+        for path in &files {
+            peps.push(tacit_keeper::pep::parse_pep(&std::fs::read_to_string(path)?)?);
+        }
+        peps.sort_by_key(|p| p.number);
+        tacit_keeper::pep::ingest_peps(&mut ledger, &peps)?;
+        parse_golden_rows(&std::fs::read_to_string(repo.join("docs/PEP-GOLDEN.md"))?, "P-")?
+    } else {
+        ingest_corpus(&mut ledger, &repo)?;
+        parse_golden(&std::fs::read_to_string(repo.join("docs/GOLDEN.md"))?)?
+    };
     let projection = Projection::rebuild(&ledger);
     let index = TextIndex::rebuild(&ledger);
     let embedder = HashingEmbedder::default();
     let vectors = VectorIndex::rebuild(&ledger, &embedder);
-    let questions = parse_golden(&std::fs::read_to_string(repo.join("docs/GOLDEN.md"))?)?;
 
     // Document frequency over what the default view admits, so "how rare is
     // this word here" can be shown beside the ranking it produced.
@@ -141,7 +165,9 @@ fn anchor(ledger: &Ledger, record: &Record) -> String {
     };
     for entity in refs {
         if let Some(e) = ledger.entity(entity)
-            && (e.kind() == tacit_keeper::DECISION_KIND || e.kind() == tacit_keeper::UNKNOWN_KIND)
+            && (e.kind() == tacit_keeper::DECISION_KIND
+                || e.kind() == tacit_keeper::UNKNOWN_KIND
+                || e.kind() == tacit_keeper::pep::PROPOSAL_KIND)
         {
             return e.label().to_string();
         }

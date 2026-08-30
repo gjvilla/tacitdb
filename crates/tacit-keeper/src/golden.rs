@@ -110,6 +110,11 @@ pub struct Graded {
     pub tags: Vec<String>,
     pub top: Vec<String>,
     pub cited_gaps: Vec<String>,
+    /// The two numbers the outcome rests on (design/001 §7), carried through
+    /// so a report can show *why* a verdict fell where it did — U-38 is an
+    /// argument about their ratio, and a suite that hides them cannot inform it.
+    pub coverage: f64,
+    pub known: f64,
 }
 
 impl Graded {
@@ -175,9 +180,17 @@ impl Scorecard {
 
 /// Parse the `## Questions` table of `docs/GOLDEN.md`.
 pub fn parse_golden(text: &str) -> Result<Vec<GoldenQuestion>, ParseError> {
+    parse_golden_rows(text, "G-")
+}
+
+/// Parse a question table whose ids carry another prefix. The suite over the
+/// proposals corpus uses `P-`, so a report naming a question says which corpus
+/// it was graded against without a reader holding two documents side by side.
+pub fn parse_golden_rows(text: &str, prefix: &str) -> Result<Vec<GoldenQuestion>, ParseError> {
+    let row_start = format!("| {prefix}");
     let mut questions = Vec::new();
-    // Section-aware, because the document holds two tables of `| G-` rows and
-    // a malformed row here is a hard error by design — which would make the
+    // Section-aware, because the document holds two tables of question-id rows
+    // and a malformed row here is a hard error by design — which would make the
     // baseline table below break the suite it exists to protect.
     let mut in_baseline = false;
     for line in text.lines() {
@@ -185,7 +198,7 @@ pub fn parse_golden(text: &str) -> Result<Vec<GoldenQuestion>, ParseError> {
         if let Some(heading) = trimmed.strip_prefix("## ") {
             in_baseline = heading.to_lowercase().contains("baseline");
         }
-        if in_baseline || !trimmed.starts_with("| G-") {
+        if in_baseline || !trimmed.starts_with(&row_start) {
             continue;
         }
         let cells: Vec<&str> = trimmed
@@ -365,6 +378,12 @@ pub fn absent_vocabulary(
 
 /// Read the recorded baseline out of the suite document.
 pub fn parse_baseline(text: &str) -> BTreeMap<String, Vec<String>> {
+    parse_baseline_rows(text, "G-")
+}
+
+/// Read a baseline whose question ids carry another prefix.
+pub fn parse_baseline_rows(text: &str, prefix: &str) -> BTreeMap<String, Vec<String>> {
+    let row_start = format!("| {prefix}");
     let mut baseline = BTreeMap::new();
     let mut in_baseline = false;
     for line in text.lines() {
@@ -375,7 +394,7 @@ pub fn parse_baseline(text: &str) -> BTreeMap<String, Vec<String>> {
         if !in_baseline {
             continue;
         }
-        let Some(rest) = trimmed.strip_prefix("| G-") else { continue };
+        let Some(rest) = trimmed.strip_prefix(&row_start) else { continue };
         let cells: Vec<&str> = rest.split('|').map(str::trim).collect();
         if cells.len() < 2 {
             continue;
@@ -385,7 +404,7 @@ pub fn parse_baseline(text: &str) -> BTreeMap<String, Vec<String>> {
         } else {
             cells[1].split_whitespace().map(str::to_string).collect()
         };
-        baseline.insert(format!("G-{}", cells[0]), words);
+        baseline.insert(format!("{prefix}{}", cells[0]), words);
     }
     baseline
 }
@@ -484,11 +503,22 @@ fn grade(ledger: &Ledger, question: &GoldenQuestion, found: &Retrieved<'_>) -> G
         }
     };
 
-    Graded { question: question.clone(), verdict, tags: found.tags().iter().map(|t| t.to_string()).collect(), top, cited_gaps }
+    Graded {
+        question: question.clone(),
+        verdict,
+        tags: found.tags().iter().map(|t| t.to_string()).collect(),
+        top,
+        cited_gaps,
+        coverage: found.coverage,
+        known: found.known,
+    }
 }
 
-/// The corpus label a record answers to (`D-0015`, `U-5`), for comparing
-/// against an expectation written in those terms.
+/// The corpus label a record answers to (`D-0015`, `U-5`, `PEP-0440`), for
+/// comparing against an expectation written in those terms. `proposal` is the
+/// kind the PEP adapter files under; a record's title and body both anchor to
+/// the same proposal, deliberately — the suite asks whether the right proposal
+/// was found, not which of its indexed documents carried it there.
 fn anchor_of(ledger: &Ledger, record: &tacit_core::Record) -> String {
     let entities = match record.content() {
         Content::Claim(claim) => claim.entity_refs(),
@@ -497,7 +527,7 @@ fn anchor_of(ledger: &Ledger, record: &tacit_core::Record) -> String {
     };
     for entity in entities {
         if let Some(e) = ledger.entity(entity)
-            && matches!(e.kind(), "decision" | "unknown")
+            && matches!(e.kind(), "decision" | "unknown" | crate::pep::PROPOSAL_KIND)
         {
             return e.label().to_string();
         }
@@ -566,13 +596,15 @@ mod tests {
         assert!(
             questions.iter().any(|q| matches!(&q.expect, Expectation::Abstain { gap: None }))
         );
-        assert!(questions.iter().any(|q| q.pending.is_some()));
-
-        let pending = questions.iter().find(|q| q.pending.is_some()).unwrap();
-        assert_eq!(pending.pending.as_deref(), Some("U-23"));
-        // The expectation itself survives the pending marker.
-        assert!(!matches!(&pending.expect, Expectation::Abstain { gap: None })
-            || pending.id == "G-09");
+        // The expectation itself survives a pending marker, whichever unknown
+        // it names — the suite now carries markers against more than U-23.
+        assert!(questions.iter().any(|q| q.pending.as_deref() == Some("U-23")));
+        assert!(
+            questions
+                .iter()
+                .filter(|q| q.pending.is_some())
+                .all(|q| matches!(&q.expect, Expectation::Answer(_) | Expectation::Abstain { .. }))
+        );
     }
 
     /// Every question is owned and has a trigger: golden data is standard work
@@ -802,6 +834,47 @@ mod tests {
         let card = configured.score(&[unanswerable]);
         assert_eq!(card.graded[0].verdict, Verdict::Missed);
         assert_eq!(card.graded[0].verdict.owner(), "retrieval: recall");
+    }
+
+    /// The proposals suite's document-side invariants, testable without the
+    /// corpus (which is never vendored — U-11). The runner enforces the rest
+    /// when the pinned slice is present.
+    #[test]
+    fn the_proposals_suite_is_governed_and_its_markers_are_registered() {
+        let text =
+            std::fs::read_to_string(repo_root().join("docs/PEP-GOLDEN.md")).unwrap();
+        let questions = parse_golden_rows(&text, "P-").expect("the proposals suite parses");
+        assert!(questions.len() >= 20, "the suite is loaded, not a fragment");
+
+        let register =
+            std::fs::read_to_string(repo_root().join("docs/REGISTER.md")).unwrap();
+        let unknowns = crate::register::parse_register(&register).unwrap();
+        let baseline = parse_baseline_rows(&text, "P-");
+        for question in &questions {
+            assert!(!question.owner.is_empty(), "{} has no owner", question.id);
+            assert!(!question.review_trigger.is_empty(), "{} has no trigger", question.id);
+            // A `pending` marker with no registered cause is a way of
+            // declaring the suite green; the rule is the same as the G-suite's.
+            if let Some(pending) = &question.pending {
+                assert!(
+                    unknowns.iter().any(|u| u.id == *pending),
+                    "{} is pending {pending}, which the register does not list",
+                    question.id
+                );
+            }
+            // That ledger holds no gap records, so a citing abstention could
+            // never be satisfied — expecting one would be a standing failure.
+            assert!(
+                !matches!(&question.expect, Expectation::Abstain { gap: Some(_) }),
+                "{} expects a cited gap, and the proposals ledger has none",
+                question.id
+            );
+            assert!(
+                baseline.contains_key(&question.id),
+                "{} has no vocabulary baseline recorded",
+                question.id
+            );
+        }
     }
 
     #[test]

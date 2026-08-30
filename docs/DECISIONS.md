@@ -1717,6 +1717,79 @@ commit identity — the gate stays mechanical; only the violation is gone.
 
 ---
 
+## D-0039 · Retrieval is measured on words nobody here wrote
+
+```yaml
+id: D-0039
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: U-9's real-language half — the reader shipped 2026-08-29; this is the
+  suite and the first measurement, resolving U-9
+evidence: [docs/PEP-GOLDEN.md, scripts/fetch-proposals.sh,
+  crates/tacit-keeper/examples/pep_golden.rs, docs/REGISTER.md]
+review_trigger: if the slice repins; when U-40 or U-41 moves; before any claim
+  that retrieval is good (the bar U-23 set now has an outside number)
+```
+
+**Assertion.** Retrieval quality is now graded on a corpus this project did not
+write: sixty packaging proposals pinned to one upstream commit, fetched by
+script and never vendored (U-11 stands; the raw documents carry contact
+details), with twenty-four questions agreed against them in
+[PEP-GOLDEN.md](PEP-GOLDEN.md). The runner refuses to grade a directory that is
+not exactly the pinned slice, because a suite agreed against one corpus and run
+over another measures nothing. First grading: **16/24, five of them earned by
+declining to answer** — the number H-0001(c) wanted and the self-corpus could
+not honestly produce.
+
+**What the questions caught before scoring anything.** P-13 was written as a
+trap — its answer has three retired predecessors sharing its whole vocabulary —
+and it fired on the ingest, not the ranker: a promotion retires one record per
+verdict, so PEP-0600's three replacements left two predecessors governing, and
+a `Superseded-By` header naming a present successor was trusted to mean the
+successor would retire it, which PEP-0621 never does for PEP-0631. Both fixed:
+extra replacements retire in their own verdicts, and a superseded proposal
+still governing after every successor has spoken retires itself — the status is
+the last witness, read after the loop because it cannot be known inside it.
+Third time the state fold has chosen an interface, and the second modelling
+error this corpus has caught in two days.
+
+**Every shortfall is filed by measurement.** The G-suite's scar — three of four
+failures once filed under a cause that does not explain them — is the rule
+here from day one: `explain --proposals` ran before any `pending` marker was
+written. Five failures are U-23's (paraphrase and same-vocabulary neighbours,
+margins of 0.02 and 4%; calibration declining the right answer at coverage
+0.31). Three are not, and two of those are new registrations: **U-40**, a fair
+question about a refusal cannot be answered because refused records are
+invisible to the governed view — correct per design/001 §7 and still the wrong
+outcome, with the open half being who decides a question is *about* a record
+rather than answered *by* it; and **U-41**, fusion losing a record both rankers
+held in their top three, which retires the "the fusion constant does not
+matter" reading D-0028's sweep suggested — that result was about the corpus,
+not the constant. The eighth, P-22, bluffs at coverage = reach = 1.00 with a
+1.6% margin, handing U-38 exactly the outside measurement its trigger demanded:
+the ratio clause of its proposed rule separates nothing on real language, and
+the margin clause is the whole question now.
+
+**What the vector ranker turns out to be worth.** Four questions pass with
+vector candidates that fail without them (12/24 → 16/24). U-33 recorded that
+the second ranker earned nothing the suite could measure; that was true of a
+54-record corpus that questions its own vocabulary, and false in general —
+the ranker was never useless, only unmeasurable at that scale. First
+register-recorded conclusion the outside corpus has reversed.
+
+**What this deliberately does not do.** The suite does not gate the build the
+way the G-suite does — the corpus is not in the repository, so CI cannot
+assume it; the runner is red on regressions when it runs, and the doc-only
+invariants (governance, pending markers naming registered unknowns) are
+tested without the corpus. Dates still parse to strings and do not fill
+valid_from, so record-time travel over this ledger is not yet meaningful. And
+the questions were agreed by the same hand that chose the slice — an outside
+corpus, not yet an outside examiner.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

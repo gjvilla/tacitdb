@@ -409,39 +409,27 @@ pub fn ingest_peps(ledger: &mut Ledger, peps: &[Pep]) -> Result<PepReport, Inges
 
         let decider = decider(pep);
         let body_id = body_of[&pep.number];
-        // One verdict promotes this and retires what it replaces (design/001
-        // §3.1) — but only a record already promoted can be retired, so a
-        // replacement that arrives before the thing it replaces promotes alone
-        // and says so rather than failing.
-        let retiring = pep
+        // What this proposal replaces and can actually retire. Only a record
+        // already promoted can be retired; one that is present but never
+        // governed (refused, or still a draft) is reported rather than
+        // half-handled. The grammar takes one `retiring` per promotion, so a
+        // proposal replacing several writes the rest as their own retirements
+        // in the same breath — first seen at PEP-0600, which replaces three.
+        let governed: Vec<RecordId> = pep
             .replaces
             .iter()
-            .find_map(|r| body_of.get(r).copied())
-            .filter(|id| promoted.contains(id));
-        if retiring.is_none()
-            && let Some(r) = pep.replaces.first()
-            && body_of.contains_key(r)
-        {
-            report.dangling.push((pep.label(), format!("Replaces {r} out of order")));
+            .filter_map(|r| body_of.get(r).copied())
+            .filter(|id| promoted.contains(id))
+            .collect();
+        for r in &pep.replaces {
+            if body_of.get(r).is_some_and(|id| !promoted.contains(id)) {
+                report.dangling.push((pep.label(), format!("Replaces {r}, which does not govern")));
+            }
         }
+        let retiring = governed.first().copied();
 
         match pep.status.lifecycle() {
             Lifecycle::Proposed => report.proposed += 1,
-            Lifecycle::Promoted => {
-                ledger.append(verdict(
-                    &decider,
-                    pep,
-                    VerdictAction::Promote { target: body_id, retiring },
-                    format!("status {:?}", pep.status),
-                ))?;
-                promoted.insert(body_id);
-                if let Some(id) = retiring {
-                    promoted.remove(&id);
-                    report.retired += 1;
-                }
-                report.records += 1;
-                report.promoted += 1;
-            }
             Lifecycle::Refused => {
                 ledger.append(verdict(
                     &decider,
@@ -452,7 +440,7 @@ pub fn ingest_peps(ledger: &mut Ledger, peps: &[Pep]) -> Result<PepReport, Inges
                 report.records += 1;
                 report.refused += 1;
             }
-            Lifecycle::Replaced => {
+            Lifecycle::Promoted | Lifecycle::Replaced => {
                 ledger.append(verdict(
                     &decider,
                     pep,
@@ -466,33 +454,58 @@ pub fn ingest_peps(ledger: &mut Ledger, peps: &[Pep]) -> Result<PepReport, Inges
                 }
                 report.records += 1;
                 report.promoted += 1;
-
-                // Its successor retires it if the successor is here; otherwise
-                // the status is the only witness and this verdict is it.
-                match pep.superseded_by {
-                    Some(n) if present.contains(&n) => {}
-                    other => {
-                        ledger.append(verdict(
-                            &decider,
-                            pep,
-                            VerdictAction::Retire {
-                                target: body_id,
-                                reason: RetireReason::Superseded,
-                            },
-                            match other {
-                                Some(n) => format!("superseded by PEP-{n:04}, outside this slice"),
-                                None => "superseded, successor unstated".into(),
-                            },
-                        ))?;
-                        promoted.remove(&body_id);
-                        report.records += 1;
-                        report.retired += 1;
-                        if let Some(n) = other {
-                            report.dangling.push((pep.label(), format!("Superseded-By {n}")));
-                        }
-                    }
+                for id in governed.iter().skip(1) {
+                    ledger.append(verdict(
+                        &decider,
+                        pep,
+                        VerdictAction::Retire { target: *id, reason: RetireReason::Superseded },
+                        format!("one of several proposals {} replaces", pep.label()),
+                    ))?;
+                    promoted.remove(id);
+                    report.records += 1;
+                    report.retired += 1;
                 }
             }
+        }
+    }
+
+    // A superseded proposal still governing after every successor has spoken
+    // retires itself: its status is the last witness. This is a fact that can
+    // only be read at the end — a successor may be absent from the slice, may
+    // never govern, or may not declare the replacement back (PEP-0621 says
+    // nothing about the PEP-0631 it superseded) — and the first version of
+    // this, which trusted `Superseded-By` naming a present successor, left
+    // three retired-in-the-source proposals answering queries as promoted.
+    for pep in peps {
+        if pep.status.lifecycle() != Lifecycle::Replaced {
+            continue;
+        }
+        let body_id = body_of[&pep.number];
+        if !promoted.contains(&body_id) {
+            continue;
+        }
+        let (why, note) = match pep.superseded_by {
+            Some(n) if present.contains(&n) => (
+                format!("superseded by PEP-{n:04}, which did not retire it"),
+                Some(format!("Superseded-By {n}, which did not retire it")),
+            ),
+            Some(n) => (
+                format!("superseded by PEP-{n:04}, outside this slice"),
+                Some(format!("Superseded-By {n}")),
+            ),
+            None => ("superseded, successor unstated".to_string(), None),
+        };
+        ledger.append(verdict(
+            &decider(pep),
+            pep,
+            VerdictAction::Retire { target: body_id, reason: RetireReason::Superseded },
+            why,
+        ))?;
+        promoted.remove(&body_id);
+        report.records += 1;
+        report.retired += 1;
+        if let Some(note) = note {
+            report.dangling.push((pep.label(), note));
         }
     }
     Ok(report)
@@ -648,6 +661,72 @@ mod tests {
         assert_eq!(report.promoted, 1, "it governed before it was replaced");
         assert_eq!(report.retired, 1);
         assert_eq!(report.dangling, vec![("PEP-0013".to_string(), "Superseded-By 14".to_string())]);
+    }
+
+    /// The grammar retires one record per promotion, so a proposal replacing
+    /// several must write the rest as their own retirements — or two of three
+    /// predecessors keep answering queries as promoted, which is how this was
+    /// found (PEP-0600 replaces three, and the suite's ranking trap surfaced
+    /// the two that stayed).
+    #[test]
+    fn a_proposal_replacing_several_retires_every_one_of_them() {
+        let peps: Vec<Pep> = [
+            pep(20, "Superseded", "Superseded-By: 23"),
+            pep(21, "Superseded", "Superseded-By: 23"),
+            pep(22, "Superseded", "Superseded-By: 23"),
+            pep(23, "Final", "Replaces: 20, 21, 22"),
+        ]
+        .iter()
+        .map(|t| parse_pep(t).unwrap())
+        .collect();
+        let mut ledger = Ledger::new();
+        let report = ingest_peps(&mut ledger, &peps).unwrap();
+        assert_eq!(report.retired, 3, "all three predecessors stop governing");
+        assert_eq!(report.promoted, 4, "each governed until it was replaced");
+        assert!(report.dangling.is_empty(), "nothing dangles: {:?}", report.dangling);
+    }
+
+    /// `Superseded-By` naming a present successor is not enough: the successor
+    /// has to actually retire it. PEP-0621 declares nothing about the
+    /// PEP-0631 it superseded, and trusting the header left 631 governing.
+    #[test]
+    fn a_successor_that_stays_silent_does_not_leave_its_predecessor_governing() {
+        let peps: Vec<Pep> = [
+            pep(30, "Final", ""), // successor, no Replaces header
+            pep(31, "Superseded", "Superseded-By: 30"),
+        ]
+        .iter()
+        .map(|t| parse_pep(t).unwrap())
+        .collect();
+        let mut ledger = Ledger::new();
+        let report = ingest_peps(&mut ledger, &peps).unwrap();
+        assert_eq!(report.retired, 1, "the status is the last witness");
+        assert_eq!(
+            report.dangling,
+            vec![("PEP-0031".to_string(), "Superseded-By 30, which did not retire it".to_string())]
+        );
+    }
+
+    /// A replacement of something that never governed retires nothing and says
+    /// so — a rejected proposal cannot be retired by the record that replaced
+    /// it, only refused by its own verdict.
+    #[test]
+    fn replacing_a_proposal_that_never_governed_is_reported_not_performed() {
+        let peps: Vec<Pep> = [
+            pep(40, "Rejected", ""),
+            pep(41, "Final", "Replaces: 40"),
+        ]
+        .iter()
+        .map(|t| parse_pep(t).unwrap())
+        .collect();
+        let mut ledger = Ledger::new();
+        let report = ingest_peps(&mut ledger, &peps).unwrap();
+        assert_eq!(report.retired, 0);
+        assert_eq!(report.refused, 1);
+        assert_eq!(
+            report.dangling,
+            vec![("PEP-0041".to_string(), "Replaces 40, which does not govern".to_string())]
+        );
     }
 
     /// The status is not the author's verdict, and the record says so.

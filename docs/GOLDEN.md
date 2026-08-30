@@ -52,6 +52,16 @@ meaning:
   spelling a person might reasonably type; tuning it to match the corpus would
   be tuning the instrument to the result.
 
+Two more arrived 2026-08-30 and are not U-23's: G-07 and G-10 are
+`pending U-41`. In both, the lexical ranker alone holds the expected record at
+rank zero — for G-10 at more than twice the runner-up's score — and fusion
+under vector candidates hands the top places elsewhere; G-10 then fails to
+cite its gap because the gap channel reads the same fused candidates
+(D-0031). Both moved the day D-0039 and the new register rows entered the
+corpus — U-37's drift, visible this once because it crossed verdict
+boundaries instead of shifting beneath a pass. The evidence lives in the
+register rows, named by id for the reason U-27 gives.
+
 A methodological note, learned the hard way and tracked as U-27: this corpus
 describes itself, so a register entry that quotes a golden question's exact
 phrasing will rank for that question and displace the record it was asking
@@ -68,10 +78,10 @@ check that no record was written *about* it.
 | G-04 | what separates the governed ledger from the instrument panel | answer D-0013 | Greg Villa | when the two-ledger boundary is redrawn |
 | G-05 | what workload is v1 designed against | answer D-0003 | Greg Villa | when the v1 workload changes |
 | G-06 | is this a personal project or owned by an employer | answer D-0010 | Greg Villa | re-read 2026-08-29 on resolution (D-0038): the answer stands, now backed by fact; re-review if the employer introduces an IP agreement or asserts a claim |
-| G-07 | why was the working name retired | answer D-0011 | Greg Villa | when U-6 resolves |
+| G-07 | why was the working name retired | answer D-0011 (pending U-41) | Greg Villa | when U-6 resolves; re-read when U-41 moves |
 | G-08 | what did the prior art survey conclude about building versus adopting | answer D-0008 (pending U-23) | Greg Villa | when a surveyed engine ships the wedge |
 | G-09 | which storage engine does the project use | answer D-0019 (pending U-23) | Greg Villa | when the store stops being an append-only log |
-| G-10 | what licence will the engine ship under | abstain U-17 | Greg Villa | when U-17 resolves |
+| G-10 | what licence will the engine ship under | abstain U-17 (pending U-41) | Greg Villa | when U-17 resolves; re-read when U-41 moves |
 | G-15 | what happens in the ledger when a decision record is edited | answer D-0021 | Greg Villa | when the ingest stops being a sync |
 | G-16 | what does the engine do if the machine clock moves backwards | answer D-0022 | Greg Villa | when more than one process writes one log |
 | G-17 | what is recorded when an open question is reworded rather than answered | answer D-0023 | Greg Villa | when a fifth withdrawal reason is wanted |
