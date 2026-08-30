@@ -428,6 +428,15 @@ pub struct Item<'a> {
     /// Cosine similarity to the query, when vector candidates are in play.
     pub similarity: f64,
     pub via: Via,
+    /// The window of the record a consumer receives when the whole record
+    /// would not fit its share of the budget — `None` means the full text was
+    /// assembled. On a long-document corpus this is what keeps the budget from
+    /// deciding how many answers exist (U-43): one 3,700-token document was
+    /// eating a 4,000-token budget whole, so every answer below first place
+    /// existed in the plan and could not leave the engine. The full record is
+    /// always reachable by id; the excerpt is assembly, not truncation of the
+    /// record.
+    pub excerpt: Option<String>,
 }
 
 /// The confidence half of the answer. `registered_gap` is deliberately *not*
@@ -744,6 +753,7 @@ impl<'a> Retriever<'a> {
                 }).map(|record| Item {
                     record,
                     score: *score,
+                    excerpt: None,
                     relevance: raw.get(id).copied().unwrap_or(0.0),
                     similarity: similarities.get(id).copied().unwrap_or(0.0),
                     via: match (raw.contains_key(id), similarities.contains_key(id)) {
@@ -793,7 +803,17 @@ impl<'a> Retriever<'a> {
         };
 
         let total = items.len();
-        let items = self.apply_budget(items, query.budget);
+        // The words an excerpt should center on: the query's own, plus any
+        // spelling the index read a term as (a reader asking about "licence"
+        // deserves a window around "license", not around the document's
+        // opening).
+        let stopwords: BTreeSet<String> = query.stopwords.iter().map(|w| fold(w)).collect();
+        let mut excerpt_terms: BTreeSet<String> = tokenize(&query.text)
+            .into_iter()
+            .filter(|t| !stopwords.contains(t))
+            .collect();
+        excerpt_terms.extend(candidates.read_as.iter().map(|(_, near)| near.clone()));
+        let items = self.apply_budget(items, query.budget, &excerpt_terms);
         let truncated = total - items.len();
 
         Retrieved {
@@ -1013,6 +1033,7 @@ impl<'a> Retriever<'a> {
                                 relevance: 0.0,
                                 similarity: 0.0,
                                 via: Via::Expanded { from: *seed, path: path.clone() },
+                                excerpt: None,
                             });
                         }
                     }
@@ -1108,14 +1129,41 @@ impl<'a> Retriever<'a> {
         gaps
     }
 
-    fn apply_budget(&self, items: Vec<Item<'a>>, budget: Budget) -> Vec<Item<'a>> {
+    /// Assemble items under the budget, excerpting any record that would not
+    /// fit its share of it.
+    ///
+    /// The share is the budget's own arithmetic — `max_tokens / k` — and
+    /// deliberately not a new constant: a budget that promises k answers
+    /// within a token allowance has already said how much any one answer may
+    /// take. Before this, a record was assembled whole or not at all, and on
+    /// a corpus of 3,700-token documents "whole" meant the first fused item
+    /// consumed the entire allowance — the ranker's second and third answers
+    /// existed and could not leave the engine (U-43, found when the P-suite
+    /// graded a rank-2 answer as never surfaced). Ranking is untouched:
+    /// records are still scored whole, and whether they should be *indexed*
+    /// in smaller pieces is U-39's question, not this one.
+    fn apply_budget(
+        &self,
+        items: Vec<Item<'a>>,
+        budget: Budget,
+        terms: &BTreeSet<String>,
+    ) -> Vec<Item<'a>> {
+        let share = (budget.max_tokens / budget.k.max(1)).max(1);
         let mut kept = Vec::new();
         let mut tokens = 0usize;
-        for item in items {
+        for mut item in items {
             if kept.len() >= budget.k {
                 break;
             }
-            let cost = indexable_text(item.record).map(|t| tokenize(&t).len()).unwrap_or(0);
+            let mut cost = 0usize;
+            if let Some(text) = indexable_text(item.record) {
+                cost = tokenize(&text).len();
+                if cost > share {
+                    let window = best_window(&text, terms, share);
+                    cost = tokenize(&window).len();
+                    item.excerpt = Some(window);
+                }
+            }
             if !kept.is_empty() && tokens + cost > budget.max_tokens {
                 break;
             }
@@ -1128,6 +1176,72 @@ impl<'a> Retriever<'a> {
     pub fn projection(&self) -> &'a Projection {
         self.projection
     }
+}
+
+/// The `share`-word window of `text` that covers the most of the question:
+/// ranked by distinct query terms present, then total occurrences, then
+/// earliest — so two windows mentioning the same term once each lose to one
+/// window holding two different terms, and a document that never mentions the
+/// query at all yields its opening, which is at least the document introducing
+/// itself. Ellipses mark where the record continues; the full text is always
+/// reachable from the record id, so this is assembly, not loss.
+fn best_window(text: &str, terms: &BTreeSet<String>, share: usize) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= share {
+        return words.join(" ");
+    }
+    let order: BTreeMap<&str, usize> =
+        terms.iter().enumerate().map(|(i, t)| (t.as_str(), i)).collect();
+    // Which query term each word answers to, if any — computed once, so the
+    // slide below is O(words) rather than O(words × window).
+    let hit: Vec<Option<usize>> = words
+        .iter()
+        .map(|w| tokenize(w).iter().find_map(|t| order.get(t.as_str()).copied()))
+        .collect();
+
+    let mut counts = vec![0usize; order.len()];
+    let mut distinct = 0usize;
+    let mut occurrences = 0usize;
+    for i in hit.iter().take(share).flatten() {
+        counts[*i] += 1;
+        occurrences += 1;
+        if counts[*i] == 1 {
+            distinct += 1;
+        }
+    }
+    let mut best_start = 0usize;
+    let mut best = (distinct, occurrences);
+    for start in 1..=words.len() - share {
+        if let Some(i) = hit[start - 1] {
+            counts[i] -= 1;
+            occurrences -= 1;
+            if counts[i] == 0 {
+                distinct -= 1;
+            }
+        }
+        if let Some(i) = hit[start + share - 1] {
+            counts[i] += 1;
+            occurrences += 1;
+            if counts[i] == 1 {
+                distinct += 1;
+            }
+        }
+        if (distinct, occurrences) > best {
+            best = (distinct, occurrences);
+            best_start = start;
+        }
+    }
+
+    let end = best_start + share;
+    let mut window = String::new();
+    if best_start > 0 {
+        window.push_str("… ");
+    }
+    window.push_str(&words[best_start..end].join(" "));
+    if end < words.len() {
+        window.push_str(" …");
+    }
+    window
 }
 
 /// Combine rankings. With one input this is order-preserving, which is the
@@ -1733,6 +1847,82 @@ mod tests {
         assert!(
             position(&old, middling) < position(&old, champion),
             "k=60 prefers the middling pair"
+        );
+    }
+
+    /// U-43, held down: the budget assembles k answers, not one document.
+    /// Three long records that all match must all arrive, each cut to its
+    /// share — before this, the first consumed the allowance whole and the
+    /// ranker's other answers could not leave the engine.
+    #[test]
+    fn the_budget_no_longer_decides_how_many_answers_exist() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("process", "torque").unwrap();
+        let filler = "filler ".repeat(250);
+        for variant in ["first", "second", "third"] {
+            let body = format!("{filler} the {variant} calibration torque is thirty newton metres {filler}");
+            let id = ledger.append(prose(subject, &body, Author::human("Maria"))).unwrap();
+            ledger.append(promote(id)).unwrap();
+        }
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let query = Query::text("calibration torque")
+            .with_budget(Budget { k: 3, max_tokens: 600 });
+        let found = retrieve(&index, &ledger, &projection, ViewSpec::now(), &query);
+
+        assert_eq!(found.items.len(), 3, "every answer the ranker found is assembled");
+        assert_eq!(found.truncated, 0);
+        for item in &found.items {
+            let window = item.excerpt.as_deref().expect("each long record is excerpted");
+            assert!(window.contains("calibration torque"), "the window centers on the question");
+            assert!(window.starts_with("… ") && window.ends_with(" …"));
+            assert!(
+                tokenize(window).len() <= 200 + 8,
+                "an excerpt stays near its share of the budget"
+            );
+        }
+    }
+
+    /// A record that fits its share is assembled whole; excerpting is only
+    /// what the budget forces, never a default haircut.
+    #[test]
+    fn a_short_record_is_assembled_whole() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener torque"),
+        );
+        assert!(!found.items.is_empty());
+        assert!(found.items.iter().all(|i| i.excerpt.is_none()));
+    }
+
+    /// The window follows the index's spelling bridge: a reader asking about
+    /// a word the corpus spells differently gets the window around the
+    /// corpus's spelling, not the document's opening.
+    #[test]
+    fn an_excerpt_follows_the_spelling_the_index_read() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("topic", "licensing").unwrap();
+        let filler = "unrelated prose about many other matters entirely ".repeat(60);
+        let body = format!("{filler} the permissive licence suits the engine {filler}");
+        let id = ledger.append(prose(subject, &body, Author::human("Greg"))).unwrap();
+        ledger.append(promote(id)).unwrap();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        // The corpus writes "licence"; the reader types "license".
+        let query = Query::text("permissive license")
+            .with_budget(Budget { k: 4, max_tokens: 400 });
+        let found = retrieve(&index, &ledger, &projection, ViewSpec::now(), &query);
+        assert!(!found.items.is_empty());
+        let window = found.items[0].excerpt.as_deref().expect("the record is long");
+        assert!(
+            window.contains("permissive licence"),
+            "the window found the corpus's own spelling: {window:?}"
         );
     }
 

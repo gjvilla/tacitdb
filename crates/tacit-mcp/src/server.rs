@@ -76,6 +76,10 @@ pub struct SearchItem {
     /// reached by similarity alone, `lexical+vector` for both, or `expanded`
     /// for context reached by traversal.
     pub via: String,
+    /// True when `text` is the window of a long record around your question
+    /// rather than the whole record — the budget assembles k answers, not one
+    /// document (U-43). Fetch the record by id for the full text.
+    pub excerpted: bool,
     #[serde(flatten)]
     pub record: RecordOut,
 }
@@ -232,17 +236,27 @@ impl TacitServer {
                 items: found
                     .items
                     .iter()
-                    .map(|item| SearchItem {
-                        relevance: (item.relevance * 100.0).round() / 100.0,
-                        via: match &item.via {
-                            tacit_core::Via::Lexical => "lexical".to_string(),
-                            tacit_core::Via::Vector => "vector".to_string(),
-                            tacit_core::Via::Hybrid => "lexical+vector".to_string(),
-                            tacit_core::Via::Expanded { path, .. } => {
-                                format!("expanded ({} edge(s))", path.len())
-                            }
-                        },
-                        record: RecordOut::of(&store.ledger, item.record),
+                    .map(|item| {
+                        let mut record = RecordOut::of(&store.ledger, item.record);
+                        // The budget assembled a window, and the window is
+                        // what this tool serves — handing back the full text
+                        // anyway would spend the tokens the excerpt saved.
+                        if let Some(excerpt) = &item.excerpt {
+                            record.text = excerpt.clone();
+                        }
+                        SearchItem {
+                            relevance: (item.relevance * 100.0).round() / 100.0,
+                            via: match &item.via {
+                                tacit_core::Via::Lexical => "lexical".to_string(),
+                                tacit_core::Via::Vector => "vector".to_string(),
+                                tacit_core::Via::Hybrid => "lexical+vector".to_string(),
+                                tacit_core::Via::Expanded { path, .. } => {
+                                    format!("expanded ({} edge(s))", path.len())
+                                }
+                            },
+                            excerpted: item.excerpt.is_some(),
+                            record,
+                        }
                     })
                     .collect(),
                 open_questions: found

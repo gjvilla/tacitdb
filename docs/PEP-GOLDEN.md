@@ -64,41 +64,35 @@ question passed on the re-run without being touched.
 
 ## Known shortfalls, and where each was filed
 
-Eight questions carry `pending` markers, every one placed by an
-`explain --proposals` run rather than by reading the verdict — the register's
-own scar (three of four G-suite failures were once filed under a cause that
-does not explain them) is the rule here from day one.
+Five questions carry `pending` markers. The rule from day one: no marker
+without an `explain --proposals` run — and this suite's first week showed why
+that is necessary and not sufficient. Three questions once filed here as
+meaning faults (P-02, P-03, P-17, on real evidence of tight ranking margins)
+recovered the moment assembly widened from one document to k (D-0041): their
+answers had been at fused ranks one and two all along, graded as never
+surfaced because the instrument conflated fused order with the assembled
+list. Measurement filed them; a better instrument re-filed them.
 
-- **P-02, P-17** — same-vocabulary neighbours decided by a hair: P-17's top
-  two sit 0.02 apart in 12.2. P-02's answer is lexical rank 8 and vector rank
-  0, and fusion keeps the neighbour. Words cannot separate these; meaning
-  could (U-23).
-- **P-03** — the wrong record wins by 4% on shared vocabulary (U-23).
-- **P-09, P-16** — the right record is on top and coverage sits at 0.31 and
-  0.42: the calibration case, right answer declined (U-23).
+- **P-09, P-12, P-16** — the calibration family, and all that remains of
+  U-23 here: the right record is surfaced (P-12 at rank two, after two
+  earlier filings under U-41 and then U-43 each peeled a real layer) and the
+  confidence rule declines it at coverage 0.31–0.48.
 - **P-08** — the answering record is Rejected-state, and the default view
   admits promoted claims only: absent from both rankers' candidates by
   design. A fair question about a refusal cannot currently be answered at all
-  (U-40, registered by this measurement).
-- **P-12** — first filed as fusion losing what both rankers found (U-41),
-  and the resolution of that row corrected this one: under the k=0 default
-  the answer sits at fused rank 2, inside the grading window, and the
-  4,000-token budget assembles exactly one 3,700-token document — 37 of 38
-  fused items cut. The ranker found it; the budget closed the door (U-43,
-  registered by this measurement).
+  (U-40).
 - **P-22** — bluffs at coverage = reach = 1.00; the corpus speaks every word
   of the question and does not settle it. The lexical margin over the
-  runner-up is 1.6%, which is the first outside-corpus evidence that the
-  margin clause in U-38's proposed rule is load-bearing, not decorative
-  (U-38).
+  runner-up is 1.6%, the first outside-corpus evidence that the margin
+  clause in U-38's proposed rule is load-bearing, not decorative (U-38).
 
 ## Questions
 
 | id | Question | Expect | Owner | Review trigger |
 |----|----------|--------|-------|----------------|
 | P-01 | how does a fresh python installation come with pip already available | answer PEP-0453 | Greg Villa | if the slice repins |
-| P-02 | what must a project declare before its build tool can run | answer PEP-0518 (pending U-23) | Greg Villa | if the slice repins |
-| P-03 | what is the binary package format installed without a build step | answer PEP-0427 (pending U-23) | Greg Villa | if the slice repins |
+| P-02 | what must a project declare before its build tool can run | answer PEP-0518 | Greg Villa | if the slice repins |
+| P-03 | what is the binary package format installed without a build step | answer PEP-0427 | Greg Villa | if the slice repins |
 | P-04 | how are two release versions compared and ordered | answer PEP-0440 | Greg Villa | if the slice repins |
 | P-05 | what does yanking a file from the index mean | answer PEP-0592 | Greg Villa | if the slice repins |
 | P-06 | how does an installer record the url a package was installed from | answer PEP-0610 | Greg Villa | if the slice repins |
@@ -107,12 +101,12 @@ does not explain them) is the rule here from day one.
 | P-09 | how can license terms be stated precisely in package metadata | answer PEP-0639 (pending U-23) | Greg Villa | if the slice repins |
 | P-10 | what stops pip writing into an operating system owned environment | answer PEP-0668 | Greg Villa | if the slice repins |
 | P-11 | how can an index expose a wheel's metadata without serving the whole archive | answer PEP-0658 | Greg Villa | if the slice repins |
-| P-12 | what file format records pinned dependencies for reproducible installs | answer PEP-0751 (pending U-43) | Greg Villa | if the slice repins; the rejected twin is the trap |
+| P-12 | what file format records pinned dependencies for reproducible installs | answer PEP-0751 (pending U-23) | Greg Villa | if the slice repins; the rejected twin is the trap |
 | P-13 | which platform tag covers portable linux binaries | answer PEP-0600 | Greg Villa | if the slice repins; three retired predecessors are the trap |
 | P-14 | who can take over an abandoned project name on the index | answer PEP-0541 | Greg Villa | if the slice repins |
 | P-15 | how are the names of optional extras normalised | answer PEP-0685 | Greg Villa | if the slice repins |
 | P-16 | how does a standalone script declare what it needs to run | answer PEP-0723 (pending U-23) | Greg Villa | if the slice repins |
-| P-17 | how did the simple repository api gain a json form | answer PEP-0691 (pending U-23) | Greg Villa | if the slice repins |
+| P-17 | how did the simple repository api gain a json form | answer PEP-0691 | Greg Villa | if the slice repins |
 | P-18 | why were egg uploads turned off | answer PEP-0715 | Greg Villa | if the slice repins |
 | P-19 | which proposal added the walrus operator | abstain | Greg Villa | if the slice repins to include it |
 | P-20 | who sits on the steering council | abstain | Greg Villa | never — governance is outside this slice by design |

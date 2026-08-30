@@ -1852,6 +1852,57 @@ tuning the symptom.
 
 ---
 
+## D-0041 · The budget assembles k answers, not one document
+
+```yaml
+id: D-0041
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: the U-43 repair — assembly-time excerpting, the budget's own
+  arithmetic as the window
+evidence: [docs/REGISTER.md, docs/PEP-GOLDEN.md,
+  crates/tacit-core/src/retrieval.rs]
+review_trigger: when U-39 decides how long records are indexed (that decision
+  may subsume this one); if excerpt quality is ever graded and found wanting;
+  when a consumer needs a window the equal share cannot hold
+```
+
+**Assertion.** A record that would not fit its share of the assembly budget is
+excerpted to the window of it that covers the most of the question — ranked by
+distinct query terms, then occurrences, then earliest, following any spelling
+the index read a term as. The share is `max_tokens / k`, deliberately not a
+new constant: a budget that promises k answers within an allowance has
+already said how much any one answer may take. The MCP host serves the
+window, marked `excerpted`, with the full record one `tacit_get_record` away
+— assembly, not loss, because the record itself is untouched and the
+provenance chain still reaches it. Ranking is also untouched: records are
+scored whole, and whether they should be *indexed* in pieces stays U-39's
+question.
+
+**What it measured to.** The proposals suite moves 16/24 to 19/24 with zero
+regressions and the self-corpus stands still at 17/21 — and the three
+recoveries are a third correction of cause in two days. P-02, P-03 and P-17
+were filed under U-23 as meaning faults on explain evidence of tight margins;
+the margins were real, but their answers sat at fused ranks one and two the
+whole time, and a one-item assembly graded everything below first place as
+never surfaced. The explain instrument had conflated fused order with
+assembly until D-0040 split them, so even measurement-based filing inherited
+the conflation. What U-23 keeps is what survives the widened window: the
+calibration family — P-09, P-12 (re-filed here from U-43, its third and
+narrowest filing: found at rank two, declined at coverage 0.48), P-16 — where
+the right record is surfaced and the confidence rule declines it.
+
+**What this deliberately does not do.** The window selection is graded only
+by the suites — nobody has judged excerpt *readability*, and the review
+trigger says so. `ANSWER_RANK_LIMIT` stays at three, now meaning what it
+says. And the interaction with U-39 is one-directional by design: this
+change makes long documents *deliverable*; it does nothing about the length
+discount that decides how they *rank*.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
