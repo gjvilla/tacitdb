@@ -2073,6 +2073,58 @@ the claim that a constant, or a re-slicing, was the fix.
 
 ---
 
+## D-0045 · A real model is plugged in, and the suites cannot tell
+
+```yaml
+id: D-0045
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: U-23's model half, finally measured — a real embedding model behind
+  the trait D-0020 built for one, graded on both suites against the stand-in
+evidence: [docs/REGISTER.md, crates/tacit-keeper/src/embed.rs,
+  crates/tacit-keeper/examples/meaning.rs]
+review_trigger: before any second attempt at a model, lift the plumbing caps
+  U-45 names, then rerun the meaning instrument; if its separation line ever
+  reads SEPARATED, the confidence rule's model half reopens (D-0020 said so)
+```
+
+**Assertion.** The keeper gains a real embedding model — `BAAI/bge-small-en-v1.5`
+over ONNX behind the `real-embedder` cargo feature, off by default so the
+default build stays dependency-free (R-4) and fetches nothing. It implements
+the same trait the hashing stand-in does, and the `meaning` instrument runs
+both suites under both embedders with everything else held still. The
+measured result: the real model moves the proposals suite by net zero (one
+recovery, one loss — and the loss is a question the stand-in's character
+n-grams were rescuing), costs one question on the self-corpus, and its
+similarity distributions for answerable against unanswerable questions
+overlap on both corpora, exactly as the stand-in's did when D-0020 refused
+to let similarity confer confidence. Nothing ships differently. The feature
+is an instrument until a measurement says otherwise.
+
+**What the measurement actually found.** The register's standing sentence —
+what remains needs meaning — was half wrong, and the half matters. Five of
+the eight remaining shortfalls across both suites are confidence-shaped:
+the right record surfaced and declined, or every word present and none of
+it an answer. Confidence is lexical by design, a decision D-0020 made on
+measured overlap and this measurement re-confirms, so those five were never
+reachable from the vector channel by any model. The three that were
+reachable trade one-for-one at this model's size and plumbing. Meaning in
+the ranker was not the missing piece; meaning in the confidence rule would
+be, and the distributions still refuse to license it.
+
+**The caps, named rather than hidden.** The model reads at most its context
+window, so a 3,700-token body is embedded by its opening; the trait embeds
+queries and documents through one method, so the asymmetric prefix this
+model family prefers is not applied; and the model is the small end of its
+family. Any of the three could be why the separation line still reads
+overlapping — U-45 registers them, because a second attempt that does not
+lift them first would measure the same handicaps again and call it the
+model's ceiling.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

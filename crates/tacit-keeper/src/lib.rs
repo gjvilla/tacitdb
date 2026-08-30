@@ -6,6 +6,8 @@
 
 pub mod attest;
 pub mod corpus;
+#[cfg(feature = "real-embedder")]
+pub mod embed;
 pub mod golden;
 pub mod origin;
 pub mod parse;

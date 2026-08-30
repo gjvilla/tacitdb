@@ -8,3 +8,14 @@ publish.workspace = true
 tacit-core = { path = "../tacit-core" }
 jiff = "0.2.35"
 thiserror = "2.0.20"
+fastembed = { version = "6.0.2", optional = true }
+
+[features]
+# A real embedding model, deliberately not a default: the default build stays
+# dependency-free (R-4), and the model is an opt-in measurement instrument
+# until the register says otherwise (U-23).
+real-embedder = ["dep:fastembed"]
+
+[[example]]
+name = "meaning"
+required-features = ["real-embedder"]
