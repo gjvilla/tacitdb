@@ -2125,6 +2125,57 @@ model's ceiling.
 
 ---
 
+## D-0046 · The caps are lifted and the ceiling does not move
+
+```yaml
+id: D-0046
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: resolution of U-45 — both plumbing caps lifted as its trigger
+  required, and the meaning instrument rerun with them in place
+evidence: [docs/REGISTER.md, crates/tacit-core/src/embedding.rs,
+  crates/tacit-keeper/examples/meaning.rs]
+review_trigger: a materially larger model, or a corpus whose questions and
+  documents genuinely share meaning the words hide — either reruns the
+  meaning instrument before anything else is argued
+```
+
+**Assertion.** The two caps U-45 named are lifted and stay lifted. The
+`Embedder` trait grows `embed_query`, defaulting through to `embed`, so an
+asymmetric model states its purpose on the question and a symmetric one
+never notices the seam exists — that half is simply correct plumbing and
+costs nothing. And the vector index gains embedding windows behind
+`with_embedding_windows`, the twin of the text index's passage door: a long
+record embedded piece by piece answers as its best window, so text past a
+model's context horizon has a voice. Both measured on both suites with the
+real model; neither ships as a default.
+
+**What the rerun showed.** The prefix changes nothing measurable. The
+windows recover one self-corpus question and, on the proposals corpus,
+manufacture the same bluff for the third time this week: the longest
+document's fifteen windows are fifteen chances at a high similarity, its
+best window climbs the fused order, and the abstention P-23 owed becomes a
+confident wrong answer. This is the law D-0043 found in coverage and
+D-0044 found in the lexical sweep, now in vector space — any maximum over
+per-piece scores hands the longest record the most lottery tickets,
+honest and adversarial questions alike. The windowed unanswerable
+similarity range *rises*. And the line the lifts existed to test still
+reads the same: answerable against unanswerable similarity overlaps in
+every configuration, on both corpora.
+
+**What this settles.** The overlap is not the plumbing's. With the prefix
+applied, the whole document voiced, and the record answering as its best
+window, this model still cannot tell a question the corpus settles from
+one it does not — so the refusal to let similarity confer confidence
+(D-0020, re-confirmed in D-0045) now rests on a properly-plumbed
+measurement, and the register stops predicting that the vector channel
+will ever fund confidence at this model scale. What would reopen it is in
+the review trigger, and it is not more plumbing.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

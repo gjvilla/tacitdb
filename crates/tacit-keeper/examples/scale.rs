@@ -215,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t = Instant::now();
     let mut sum = 0.0f32;
     for (_, embedded) in vectors.iter() {
-        sum += tacit_core::similarity(&probe, &embedded.vector);
+        sum += embedded.similarity_to(&probe);
     }
     let arithmetic = t.elapsed();
     let q = Query::text(sample[0].question());

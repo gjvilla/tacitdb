@@ -31,6 +31,16 @@ pub trait Embedder {
 
     /// Must return a unit-length vector of exactly `dimensions()` values.
     fn embed(&self, text: &str) -> Vec<f32>;
+
+    /// Embed a *query*, as distinct from a document. Retrieval models are
+    /// often asymmetric — this model family wants a stated-purpose prefix on
+    /// the question and none on the documents — and a trait with one method
+    /// could not express that, which U-45 recorded as a cap on any model put
+    /// behind it. The default falls through, so a symmetric embedder like the
+    /// hashing stand-in never notices the distinction exists.
+    fn embed_query(&self, text: &str) -> Vec<f32> {
+        self.embed(text)
+    }
 }
 
 /// Character n-gram hashing. Deterministic, dependency-free, and honest about
@@ -137,12 +147,24 @@ pub fn similarity(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// A stored vector plus what produced it. The content hash is what lets a
-/// rebuild skip work, and what makes a stale entry detectable.
+/// A record's stored vectors plus what produced them. One vector unless the
+/// index was built with embedding windows (U-45): a model reads at most its
+/// context window, so a long record embedded whole is embedded by its
+/// opening, and windows are how the rest of it gets a voice. The record
+/// answers as its best window, which is the same shape the lexical side
+/// measured and refused (D-0044) — kept apart deliberately, because an
+/// embedding has no term frequency to dilute and may fare differently.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Embedded {
-    pub vector: Vec<f32>,
+    pub vectors: Vec<Vec<f32>>,
     pub content_hash: u64,
+}
+
+impl Embedded {
+    /// Cosine of the probe against this record's best window.
+    pub fn similarity_to(&self, probe: &[f32]) -> f32 {
+        self.vectors.iter().map(|v| similarity(probe, v)).fold(0.0, f32::max)
+    }
 }
 
 /// Derived, rebuildable, never authoritative — the same posture as every other
@@ -179,6 +201,9 @@ const TABLES: usize = 8;
 pub struct VectorIndex {
     applied: usize,
     model_id: String,
+    /// Words per embedded window; `usize::MAX` means a record is one window,
+    /// which is the default and the only mode the shipped plan uses.
+    window_tokens: usize,
     vectors: BTreeMap<crate::id::RecordId, Embedded>,
     /// Per table: signature → the records carrying it, in id order.
     buckets: Vec<BTreeMap<u64, Vec<crate::id::RecordId>>>,
@@ -197,6 +222,7 @@ impl VectorIndex {
         Self {
             applied: 0,
             model_id: model_id.into(),
+            window_tokens: usize::MAX,
             vectors: BTreeMap::new(),
             buckets: Vec::new(),
             planes: Vec::new(),
@@ -210,6 +236,16 @@ impl VectorIndex {
         index
     }
 
+    /// Embed records window by window instead of whole — the door U-45 names,
+    /// set before the first fold for the same reason the text index's passage
+    /// size is (D-0044): an index is one fold, and re-slicing what was
+    /// already folded would break rebuild equivalence.
+    pub fn with_embedding_windows(mut self, words: usize) -> Self {
+        debug_assert_eq!(self.applied, 0, "window size is fixed at the first fold");
+        self.window_tokens = words.max(1);
+        self
+    }
+
     /// Keep neighbourhoods, so queries may probe instead of scanning.
     ///
     /// Opt-in, because the signatures are paid for at index time and held in
@@ -219,10 +255,12 @@ impl VectorIndex {
     /// point and the result is the same either way.
     pub fn with_neighbourhoods(mut self) -> Self {
         self.neighbourhoods = true;
-        let existing: Vec<(crate::id::RecordId, Vec<f32>)> =
-            self.vectors.iter().map(|(id, e)| (*id, e.vector.clone())).collect();
-        for (id, vector) in existing {
-            self.bucket(id, &vector);
+        let existing: Vec<(crate::id::RecordId, Vec<Vec<f32>>)> =
+            self.vectors.iter().map(|(id, e)| (*id, e.vectors.clone())).collect();
+        for (id, vectors) in existing {
+            for vector in &vectors {
+                self.bucket(id, vector);
+            }
         }
         self
     }
@@ -285,9 +323,23 @@ impl VectorIndex {
             let Some(record) = ledger.record(*id) else { continue };
             let Some(text) = crate::retrieval::indexable_text(record) else { continue };
             let content_hash = HashingEmbedder::hash(&text, 0);
-            let vector = embedder.embed(&text);
-            self.bucket(*id, &vector);
-            self.vectors.insert(*id, Embedded { vector, content_hash });
+            let vectors: Vec<Vec<f32>> = if self.window_tokens == usize::MAX {
+                vec![embedder.embed(&text)]
+            } else {
+                let words: Vec<&str> = text.split_whitespace().collect();
+                if words.is_empty() {
+                    vec![embedder.embed(&text)]
+                } else {
+                    words
+                        .chunks(self.window_tokens)
+                        .map(|w| embedder.embed(&w.join(" ")))
+                        .collect()
+                }
+            };
+            for vector in &vectors {
+                self.bucket(*id, vector);
+            }
+            self.vectors.insert(*id, Embedded { vectors, content_hash });
         }
         self.applied = log.len();
         self.applied - start
@@ -458,6 +510,69 @@ mod tests {
         let norm: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-5, "unit length, got {norm}");
         assert!((similarity(&a, &b) - 1.0).abs() < 1e-5);
+    }
+
+    /// U-45's first lift: a symmetric embedder never notices the query and
+    /// document paths diverged.
+    #[test]
+    fn a_symmetric_embedder_embeds_queries_and_documents_alike() {
+        let embedder = HashingEmbedder::default();
+        assert_eq!(
+            embedder.embed_query("which torque is specified"),
+            embedder.embed("which torque is specified")
+        );
+    }
+
+    /// U-45's second lift: a record embedded window by window answers as its
+    /// best window, so text past a model's context horizon still has a voice.
+    /// Held down with the hashing embedder, where the mechanism is dilution
+    /// rather than truncation — a topic buried in the tail of a long record
+    /// scores higher through its own window than through the whole.
+    #[test]
+    fn a_windowed_record_answers_as_its_best_window() {
+        use crate::content::{ClaimContent, Content, VerdictAction, VerdictContent};
+        use crate::envelope::{Author, SourceRef};
+        use crate::record::Draft;
+
+        let mut ledger = crate::ledger::Ledger::new();
+        let subject = ledger.add_entity("topic", "t").unwrap();
+        let body = format!(
+            "{} the calibration torque is thirty newton metres",
+            "assorted prose about entirely other matters ".repeat(80)
+        );
+        let id = ledger
+            .append(Draft::new(
+                Author::human("M"),
+                SourceRef::channel("interview"),
+                Content::Claim(ClaimContent::Text { body, about: vec![subject] }),
+            ))
+            .unwrap();
+        ledger
+            .append(Draft::new(
+                Author::human("M"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Promote { target: id, retiring: None },
+                    rationale: None,
+                }),
+            ))
+            .unwrap();
+
+        let embedder = HashingEmbedder::default();
+        let whole = VectorIndex::rebuild(&ledger, &embedder);
+        let mut windowed = VectorIndex::empty(embedder.model_id()).with_embedding_windows(64);
+        windowed.advance(&ledger, &embedder);
+
+        assert_eq!(windowed.len(), whole.len(), "windows multiply vectors, not records");
+        assert!(windowed.vector(id).unwrap().vectors.len() > 1);
+
+        let probe = embedder.embed_query("calibration torque newton metres");
+        let diluted = whole.vector(id).unwrap().similarity_to(&probe);
+        let voiced = windowed.vector(id).unwrap().similarity_to(&probe);
+        assert!(
+            voiced > diluted,
+            "the tail's own window beats the whole: {voiced} vs {diluted}"
+        );
     }
 
     #[test]

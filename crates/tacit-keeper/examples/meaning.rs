@@ -84,6 +84,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Some((&real_vectors, &real as &dyn Embedder)),
             &corpus.questions,
         );
+        // U-45's window lift: long records embedded piece by piece, answering
+        // as their best window, so the model reads more than each opening.
+        let mut windowed_vectors =
+            VectorIndex::empty(real.model_id()).with_embedding_windows(256);
+        windowed_vectors.advance(&corpus.ledger, &real);
+        let windowed = run_with(
+            &corpus.ledger,
+            &projection,
+            &index,
+            Some((&windowed_vectors, &real as &dyn Embedder)),
+            &corpus.questions,
+        );
 
         println!(
             "\n\x1b[1m{}\x1b[0m — {} questions",
@@ -99,20 +111,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             card.passed(),
             card.graded.len()
         );
-        for (before, after) in base.graded.iter().zip(&card.graded) {
-            if before.verdict != after.verdict {
-                println!(
-                    "    {} {:<15} -> {:<15} {}",
-                    before.question.id,
-                    before.verdict.label(),
-                    after.verdict.label(),
-                    truncate(&before.question.question, 44)
-                );
+        println!("  windowed (256-word windows)  {:>2}/{}", windowed.passed(), windowed.graded.len());
+        for (label, run) in [("real  ", &card), ("window", &windowed)] {
+            for (before, after) in base.graded.iter().zip(&run.graded) {
+                if before.verdict != after.verdict {
+                    println!(
+                        "    {label} {} {:<15} -> {:<15} {}",
+                        before.question.id,
+                        before.verdict.label(),
+                        after.verdict.label(),
+                        truncate(&before.question.question, 40)
+                    );
+                }
             }
         }
-        separation(corpus, &projection, &index, &real_vectors, &real, "real");
         separation(corpus, &projection, &index, &hashing_vectors, &hashing, "hashing");
-        known_shortfalls(&card);
+        separation(corpus, &projection, &index, &real_vectors, &real, "real");
+        separation(corpus, &projection, &index, &windowed_vectors, &real, "window");
+        known_shortfalls(&windowed);
     }
     Ok(())
 }

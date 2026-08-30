@@ -48,6 +48,15 @@ impl Embedder for RealEmbedder {
         self.dimensions
     }
 
+    /// The asymmetric half this model family trains for: questions carry a
+    /// stated purpose, documents do not. U-45's second cap, lifted — the
+    /// trait's default falls through for embedders with no such distinction.
+    fn embed_query(&self, text: &str) -> Vec<f32> {
+        self.embed(&format!(
+            "Represent this sentence for searching relevant passages: {text}"
+        ))
+    }
+
     fn embed(&self, text: &str) -> Vec<f32> {
         let mut vector = self
             .model

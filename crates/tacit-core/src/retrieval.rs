@@ -25,7 +25,7 @@
 //! authoritative.
 
 use crate::content::{ClaimContent, Content};
-use crate::embedding::{Embedder, VectorIndex, similarity};
+use crate::embedding::{Embedder, VectorIndex};
 use crate::id::{EntityId, RecordId};
 use crate::ledger::Ledger;
 use crate::projection::{GraphView, Projection, ViewSpec};
@@ -705,7 +705,7 @@ impl<'a> Retriever<'a> {
     /// scale an exact scan is correct and fast, and an ANN structure is U-26.
     fn vector_candidates(&self, query: &Query) -> (Vec<(RecordId, f64)>, usize) {
         let Some((index, embedder)) = self.vectors else { return (Vec::new(), 0) };
-        let probe = embedder.embed(&query.text);
+        let probe = embedder.embed_query(&query.text);
         if probe.iter().all(|v| *v == 0.0) {
             return (Vec::new(), 0);
         }
@@ -741,7 +741,7 @@ impl<'a> Retriever<'a> {
                     if !admits(*id) {
                         continue;
                     }
-                    let score = f64::from(similarity(&probe, &embedded.vector));
+                    let score = f64::from(embedded.similarity_to(&probe));
                     if score > 0.0 {
                         ranked.push((*id, score));
                     }
@@ -763,7 +763,7 @@ impl<'a> Retriever<'a> {
                             continue;
                         }
                         let Some(embedded) = index.vector(*id) else { continue };
-                        let score = f64::from(similarity(&probe, &embedded.vector));
+                        let score = f64::from(embedded.similarity_to(&probe));
                         if score > 0.0 {
                             ranked.push((*id, score));
                         }
