@@ -82,9 +82,11 @@ list. Measurement filed them; a better instrument re-filed them.
   design. A fair question about a refusal cannot currently be answered at all
   (U-40).
 - **P-22** — bluffs at coverage = reach = 1.00; the corpus speaks every word
-  of the question and does not settle it. The lexical margin over the
-  runner-up is 1.6%, the first outside-corpus evidence that the margin
-  clause in U-38's proposed rule is load-bearing, not decorative (U-38).
+  of the question and does not settle it. Its 1.6% margin first showed
+  U-38's margin clause was load-bearing; when the calibration table then put
+  an honest answer at margin 1.01 beside this bluff at 1.02, it refuted the
+  clause instead, and U-38 resolved as a refusal (D-0042). What remains is
+  words-not-meaning in its purest form (U-23).
 
 ## Questions
 
@@ -111,7 +113,7 @@ list. Measurement filed them; a better instrument re-filed them.
 | P-19 | which proposal added the walrus operator | abstain | Greg Villa | if the slice repins to include it |
 | P-20 | who sits on the steering council | abstain | Greg Villa | never — governance is outside this slice by design |
 | P-21 | what colour is the package index logo | abstain | Greg Villa | never — outside the record by design |
-| P-22 | how often are new python versions released | abstain (pending U-38) | Greg Villa | if the slice repins to include the release schedule |
+| P-22 | how often are new python versions released | abstain (pending U-23) | Greg Villa | if the slice repins to include the release schedule |
 | P-23 | what is the maximum size of an uploaded distribution | abstain | Greg Villa | if an upload-limit proposal enters the slice |
 | P-24 | where do installers cache downloaded wheels on disk | abstain | Greg Villa | never — installer internals are outside the record by design |
 

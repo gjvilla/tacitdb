@@ -1903,6 +1903,62 @@ discount that decides how they *rank*.
 
 ---
 
+## D-0042 · The confidence rule stands, and the relaxation is refused with numbers
+
+```yaml
+id: D-0042
+state: promoted
+author: Greg Villa
+recorded: 2026-08-30
+valid_from: 2026-08-30
+source: resolution of U-38 — the outside measurement its trigger demanded,
+  read off the calibration instrument over both suites
+evidence: [docs/REGISTER.md, crates/tacit-keeper/examples/calibration.rs]
+review_trigger: when the embedder stops being a hashing one, or a semantic
+  ranker joins the plan — either changes what the columns can hold; and any
+  future move on the confidence rule starts by rerunning the calibration
+  table over both corpora
+```
+
+**Assertion.** The confidence rule stays as D-0020 and D-0028 left it —
+coverage, score, and reach against their thresholds, nothing else — and
+U-38's proposed clause ("covered everything answerable, by a decisive
+margin") is refused. Not for lack of appeal but because the measurement its
+own row demanded came back conclusive against it, three ways, on
+forty-five questions across two corpora.
+
+**The exhibits.** First: no margin threshold can exist. P-22 bluffs at
+ratio 1.00 with a lexical margin of 1.02 over its runner-up; G-01 answers
+correctly at ratio 1.00 with a margin of 1.01. A clause that must thread a
+one-percent gap between a bluff and an honest answer is a lookup table of
+the suite, not a rule. Second: the motivating case no longer satisfies the
+rule proposed for it. G-08's coverage equalled its reach exactly when U-38
+was raised; today the ratio reads 0.78 and its reach has drifted below the
+mostly-unknown gate as the corpus grew — the anchor drift U-37 describes,
+acting on the very question that proposed the rule, which is what a rule
+fitted to one row does. Third: the columns do not contain the answer. P-12
+must be answered and P-24 must be abstained on, and they read identically —
+coverage 0.48, reach 1.00, margins 1.06 and 1.11. Separating them requires
+knowing what the words mean, which is U-23's model half and no threshold's.
+
+**What survives of U-38.** Its second fault was never about the clause and
+stays open as U-44: the outcome is judged from the first assembled item's
+coverage, and fused order chooses that item — so the ranking, not the
+calibration, decides whose confidence counts. P-12 is now live evidence
+(the wrong record's 0.48 is the number the outcome read), but whether the
+expected record's coverage differs is unmeasurable until per-item coverage
+is visible to an instrument, and shipping a fix unmeasured is the thing
+this register keeps declining to do.
+
+**Consequence for the suite.** P-22 refiles from U-38 to U-23: it bluffs
+because every one of its words is spoken by a corpus that does not settle
+it, and no lexical quantity distinguishes that from an answer — the
+words-not-meaning fault in its purest form. The calibration table joins
+explain and fusion_sweep as a permanent instrument, because this refusal is
+corpus-relative and any future proposal starts by reading it again.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

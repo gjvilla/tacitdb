@@ -790,6 +790,15 @@ impl<'a> Retriever<'a> {
         // whether the corpus can speak to what was asked at all. A question
         // made mostly of words nobody here has written is one to decline,
         // however well some record covers the remainder of it.
+        //
+        // A third clause was proposed, measured on both suites, and refused
+        // (U-38, D-0042): "covered everything answerable, by a decisive
+        // margin" confers confidence. The calibration instrument showed a
+        // bluff at margin 1.02 beside an honest answer at 1.01, the question
+        // that motivated the clause drifted out of its own precondition as
+        // the corpus grew, and two questions with identical readings needed
+        // opposite outcomes. Do not re-propose a rule over these quantities
+        // without running `--example calibration` over both corpora first.
         let known = candidates.known();
         let outcome = if items.is_empty() {
             Outcome::None
