@@ -2231,6 +2231,58 @@ operator running the rewrite against a store nothing else holds open.
 
 ---
 
+## D-0048 · The view is a parameter, and its refusals are disclosed
+
+```yaml
+id: D-0048
+state: promoted
+author: Greg Villa
+recorded: 2026-08-31
+valid_from: 2026-08-31
+source: resolution of U-40 — the view question P-08 raised, resolved without
+  the heuristic the row warned against
+evidence: [crates/tacit-core/src/retrieval.rs, crates/tacit-mcp/src/server.rs,
+  docs/REGISTER.md, docs/PEP-GOLDEN.md]
+review_trigger: when U-3 gives queries a language, revisit whether the view
+  belongs in it; if the disclosure is ever observed teaching agents to
+  routinely re-ask with full history, the default view question reopens
+```
+
+**Assertion.** A fair question about a rejected record was unanswerable from
+the governed view, and the row that recorded this warned that routing such
+questions is semantics no heuristic should guess. The resolution guesses
+nothing, twice over. First, the view becomes a parameter the asker actually
+holds: `tacit_search` takes `full_history`, the forensic `StateFilter::All`
+that always existed, with every record labeled by its state. Second, the
+engine discloses what the view refused: the lexical scan already reads the
+postings of refused records and dropped them without a trace, so the same
+pass now keeps them, and when the governed outcome is less than confident
+the result names the strongest view-refused record — at the same coverage,
+score, and reach bars a confident match must clear, so no new threshold
+exists to tune. A caller can now tell "the corpus has nothing" from "your
+view withholds what it has", which was the whole of the fault.
+
+**The ratchet holds.** The disclosure is never an answer: it enters no
+items, confers no confidence, and appears only beside weakness — a
+confident answer is not second-guessed by its superseded predecessors,
+which is the door P-13's trap closed and this deliberately does not reopen.
+Acting on a disclosure means re-asking with the wider view, a choice left
+to whoever knows what the question means — the same division of labor
+D-0043 and D-0045 settled: the engine publishes, the meaning-bearing
+consumer decides. The suite grades this honestly with its own verdict
+class, `pointed+beyond`: a pass earned by pointing at exactly the agreed
+record, distinct from answering and counted as neither abstention nor
+assertion. P-08 recovers on it; the proposals suite stands at 20/24 and the
+self-corpus did not move, because nothing about the governed plan changed.
+
+**What this deliberately does not do.** It does not decide which questions
+are *about* records rather than answered by them — that stays with the
+asker, and with U-3 if a query language ever wants to express it. And the
+disclosure is lexical only: a vector-reached refusal is not disclosed,
+consistent with similarity never conferring anything (D-0020, D-0046).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

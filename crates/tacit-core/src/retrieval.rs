@@ -504,6 +504,27 @@ pub enum Outcome {
     None,
 }
 
+/// A record the view refused that would have been a confident match (U-40).
+///
+/// The view is a parameter, and the asker may not have chosen it knowingly —
+/// a fair question about a rejected proposal finds nothing in the governed
+/// view, and "nothing found" would be the wrong report: the corpus holds the
+/// answer and the view withholds it. This is the difference, published. It is
+/// a disclosure and never an answer: it clears the same bars a confident
+/// match must, it appears only when the view's own outcome is less than
+/// confident, and acting on it means re-asking with a wider view — a choice
+/// the engine leaves to whoever knows what the question means.
+#[derive(Debug, Clone)]
+pub struct BeyondView<'a> {
+    pub record: &'a Record,
+    /// The excluded record's coverage of the question, by the same rule a
+    /// confident match is judged.
+    pub coverage: f64,
+    /// How many view-refused records matched at all, so one disclosure is
+    /// never mistaken for the whole of what the view holds back.
+    pub count: usize,
+}
+
 #[derive(Debug)]
 pub struct Retrieved<'a> {
     pub outcome: Outcome,
@@ -537,6 +558,10 @@ pub struct Retrieved<'a> {
     /// smaller under `Probe::Neighbourhoods` — published so an approximation is
     /// something a caller can see the size of rather than infer.
     pub scanned: usize,
+    /// See [`BeyondView`]. `None` when the view's own answer is confident,
+    /// when nothing the view refused clears the confident-match bars, or when
+    /// nothing was refused at all.
+    pub beyond_view: Option<BeyondView<'a>>,
 }
 
 impl Retrieved<'_> {
@@ -553,6 +578,9 @@ impl Retrieved<'_> {
         }];
         if self.has_registered_gap() {
             tags.push("registered_gap");
+        }
+        if self.beyond_view.is_some() {
+            tags.push("beyond_view");
         }
         tags
     }
@@ -663,6 +691,13 @@ struct Candidates {
     /// second condition on confidence rather than a relaxation of the first —
     /// a question can only get harder to answer confidently, never easier.
     missing_idf: f64,
+    /// Records the view refused whose postings matched anyway (U-40). The
+    /// scan already reads their postings and used to drop them without a
+    /// trace, so a caller could not tell "the corpus has nothing" from "your
+    /// view excludes what it has". Kept in the same pass, ranked the same
+    /// way, and published only as a disclosure — never as an answer.
+    shadow: Vec<(RecordId, f64)>,
+    shadow_matched: BTreeMap<RecordId, f64>,
 }
 
 impl Candidates {
@@ -671,6 +706,13 @@ impl Candidates {
             return 0.0;
         }
         self.matched_idf.get(id).copied().unwrap_or(0.0) / self.total_idf
+    }
+
+    fn shadow_coverage(&self, id: &RecordId) -> f64 {
+        if self.total_idf <= 0.0 {
+            return 0.0;
+        }
+        self.shadow_matched.get(id).copied().unwrap_or(0.0) / self.total_idf
     }
 
     /// How much of the question the corpus can speak to at all.
@@ -886,6 +928,37 @@ impl<'a> Retriever<'a> {
         let items = self.apply_budget(items, query.budget, &excerpt_terms);
         let truncated = total - items.len();
 
+        // The disclosure fires only beside a less-than-confident answer: a
+        // view whose own record settles the question has nothing to add, and
+        // a signal that second-guessed every confident answer with its
+        // superseded predecessors would re-litigate each supersession the
+        // corpus ever recorded. Gaps are skipped for the reason items skip
+        // them — a question is not an answer, withheld or otherwise.
+        let beyond_view = if outcome == Outcome::Matches {
+            None
+        } else {
+            candidates
+                .shadow
+                .iter()
+                .filter_map(|(id, score)| {
+                    self.ledger
+                        .record(*id)
+                        .filter(|record| !matches!(record.content(), Content::Gap(_)))
+                        .map(|record| (record, *score))
+                })
+                .next()
+                .filter(|(record, score)| {
+                    candidates.shadow_coverage(&record.id()) >= query.min_coverage
+                        && *score >= query.min_score
+                        && known >= query.min_known
+                })
+                .map(|(record, _)| BeyondView {
+                    record,
+                    coverage: candidates.shadow_coverage(&record.id()),
+                    count: candidates.shadow.len(),
+                })
+        };
+
         Retrieved {
             outcome,
             items,
@@ -895,6 +968,7 @@ impl<'a> Retriever<'a> {
             known,
             read_as: candidates.read_as.clone(),
             scanned,
+            beyond_view,
         }
     }
 
@@ -976,6 +1050,8 @@ impl<'a> Retriever<'a> {
 
         let mut scores: BTreeMap<(RecordId, u32), f64> = BTreeMap::new();
         let mut matched: BTreeMap<(RecordId, u32), f64> = BTreeMap::new();
+        let mut shadow_scores: BTreeMap<(RecordId, u32), f64> = BTreeMap::new();
+        let mut shadow_matched: BTreeMap<(RecordId, u32), f64> = BTreeMap::new();
         let mut total_idf = 0.0;
         let mut missing_idf = 0.0;
         let mut read_as: Vec<(String, String)> = Vec::new();
@@ -1021,9 +1097,6 @@ impl<'a> Retriever<'a> {
                 if !scope.is_empty() && !stats.entities.iter().any(|e| scope.contains(e)) {
                     continue;
                 }
-                if !self.view.admits_record(posting.record) {
-                    continue;
-                }
                 let tf = f64::from(posting.term_frequency);
                 let length = stats
                     .lengths
@@ -1032,6 +1105,17 @@ impl<'a> Retriever<'a> {
                     .unwrap_or(0);
                 let norm = 1.0 - BM25_B + BM25_B * f64::from(length) / avgdl;
                 let contribution = idf * (tf * (BM25_K1 + 1.0)) / (tf + BM25_K1 * norm);
+                if !self.view.admits_record(posting.record) {
+                    // Refused by the view, not absent from the corpus — the
+                    // difference U-40 is about, kept rather than dropped. A
+                    // record out of *scope* is different again: the caller
+                    // chose the scope, so it is neither answered nor
+                    // disclosed.
+                    *shadow_scores.entry((posting.record, posting.passage)).or_default() +=
+                        contribution;
+                    *shadow_matched.entry((posting.record, posting.passage)).or_default() += idf;
+                    continue;
+                }
                 *scores.entry((posting.record, posting.passage)).or_default() += contribution;
                 *matched.entry((posting.record, posting.passage)).or_default() += idf;
             }
@@ -1042,26 +1126,35 @@ impl<'a> Retriever<'a> {
         // confidence number stitched from several windows would describe a
         // document nobody reads — that is how a long record covered all of a
         // question it never answers (D-0043), and passage-local coverage is
-        // what closes that door.
-        let mut best: BTreeMap<RecordId, (f64, f64)> = BTreeMap::new();
-        for ((record, passage), score) in scores {
-            let covered = matched.get(&(record, passage)).copied().unwrap_or(0.0);
-            let entry = best.entry(record).or_insert((score, covered));
-            if score > entry.0 {
-                *entry = (score, covered);
+        // what closes that door. The shadow reduces identically: a disclosure
+        // ranked by different rules would disclose different records than the
+        // answer path would have found.
+        let reduce = |scores: BTreeMap<(RecordId, u32), f64>,
+                      matched: BTreeMap<(RecordId, u32), f64>|
+         -> (Vec<(RecordId, f64)>, BTreeMap<RecordId, f64>) {
+            let mut best: BTreeMap<RecordId, (f64, f64)> = BTreeMap::new();
+            for ((record, passage), score) in scores {
+                let covered = matched.get(&(record, passage)).copied().unwrap_or(0.0);
+                let entry = best.entry(record).or_insert((score, covered));
+                if score > entry.0 {
+                    *entry = (score, covered);
+                }
             }
-        }
-        let mut matched_idf: BTreeMap<RecordId, f64> = BTreeMap::new();
-        let mut ranked: Vec<(RecordId, f64)> = Vec::new();
-        for (record, (score, covered)) in best {
-            matched_idf.insert(record, covered);
-            ranked.push((record, score));
-        }
-        // Ties break on log order, so results are stable across runs.
-        ranked.sort_by(|a, b| {
-            b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
-        });
-        Candidates { ranked, read_as, matched_idf, total_idf, missing_idf }
+            let mut matched_idf: BTreeMap<RecordId, f64> = BTreeMap::new();
+            let mut ranked: Vec<(RecordId, f64)> = Vec::new();
+            for (record, (score, covered)) in best {
+                matched_idf.insert(record, covered);
+                ranked.push((record, score));
+            }
+            // Ties break on log order, so results are stable across runs.
+            ranked.sort_by(|a, b| {
+                b.1.total_cmp(&a.1).then_with(|| self.log_order(a.0).cmp(&self.log_order(b.0)))
+            });
+            (ranked, matched_idf)
+        };
+        let (ranked, matched_idf) = reduce(scores, matched);
+        let (shadow, shadow_matched) = reduce(shadow_scores, shadow_matched);
+        Candidates { ranked, read_as, matched_idf, total_idf, missing_idf, shadow, shadow_matched }
     }
 
     fn log_order(&self, id: RecordId) -> usize {
@@ -1998,6 +2091,123 @@ mod tests {
         assert_eq!(
             found.coverage, found.items[0].coverage,
             "the outcome reads the first item, deliberately"
+        );
+    }
+
+    /// U-40, held down: a fair question about a rejected record is not
+    /// answered from the governed view — and not answered with silence
+    /// either. The record the view refused is disclosed, with its coverage,
+    /// and acting on the disclosure is the asker's move, not the engine's.
+    #[test]
+    fn a_rejected_records_match_is_disclosed_not_answered() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("proposal", "P-9999").unwrap();
+        let claim = ledger
+            .append(prose(
+                subject,
+                "packages install into a local vendor directory beside the script",
+                Author::human("M"),
+            ))
+            .unwrap();
+        ledger
+            .append(Draft::new(
+                Author::human("Reviewer"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Reject { target: claim },
+                    rationale: Some("declined in review".into()),
+                }),
+            ))
+            .unwrap();
+
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("why do packages install into a local vendor directory"),
+        );
+        assert_ne!(found.outcome, Outcome::Matches, "a rejected claim never answers");
+        assert!(found.items.is_empty(), "the governed view holds nothing for this");
+        assert!(found.tags().contains(&"beyond_view"));
+        let beyond = found.beyond_view.expect("the refusal is disclosed");
+        assert_eq!(beyond.record.id(), claim);
+        assert!(beyond.coverage >= 0.5, "the disclosure clears the confident-match bar");
+        assert_eq!(beyond.count, 1);
+    }
+
+    /// The disclosure accompanies weakness, never competes with confidence:
+    /// a question the governed view settles keeps its answer unclouded by the
+    /// superseded and the refused.
+    #[test]
+    fn disclosure_never_competes_with_a_confident_answer() {
+        let mut ledger = Ledger::new();
+        let subject = ledger.add_entity("process", "torque").unwrap();
+        let rejected = ledger
+            .append(prose(subject, "the calibration torque is ninety newton metres", Author::human("M")))
+            .unwrap();
+        ledger
+            .append(Draft::new(
+                Author::human("Reviewer"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Reject { target: rejected },
+                    rationale: None,
+                }),
+            ))
+            .unwrap();
+        let governing = ledger
+            .append(prose(subject, "the calibration torque is thirty newton metres", Author::human("M")))
+            .unwrap();
+        ledger.append(promote(governing)).unwrap();
+
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("what is the calibration torque"),
+        );
+        assert_eq!(found.outcome, Outcome::Matches);
+        assert!(found.beyond_view.is_none(), "a confident answer is not second-guessed");
+    }
+
+    /// The bars are the confident-match bars, not a lower ones: an excluded
+    /// record sharing a word with the question is not worth a disclosure.
+    #[test]
+    fn a_weak_exclusion_stays_undisclosed() {
+        let (mut ledger, torque, _) = setup();
+        let rejected = ledger
+            .append(prose(torque, "the torque wrench lives in the third drawer", Author::human("M")))
+            .unwrap();
+        ledger
+            .append(Draft::new(
+                Author::human("Reviewer"),
+                SourceRef::channel("huddle"),
+                Content::Verdict(VerdictContent {
+                    action: VerdictAction::Reject { target: rejected },
+                    rationale: None,
+                }),
+            ))
+            .unwrap();
+
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("which torque does the seat fixture specify exactly"),
+        );
+        assert!(
+            found.beyond_view.is_none(),
+            "one shared word clears no bar: {:?}",
+            found.beyond_view.map(|b| b.coverage)
         );
     }
 

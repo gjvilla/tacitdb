@@ -47,6 +47,13 @@ pub struct SearchParams {
     /// the default view is what the organization has actually agreed.
     #[serde(default)]
     pub include_proposed: bool,
+    /// Search every claim ever recorded — refused and retired included, each
+    /// labeled by its state. The forensic view, for questions that are about
+    /// a record rather than answered by one: why something was rejected, what
+    /// a superseded version said. Default false, and the default's answer to
+    /// such a question is a `beyond_view` disclosure pointing here (U-40).
+    #[serde(default)]
+    pub full_history: bool,
     /// Follow this many hops out from what the matches are about, to pull in
     /// surrounding context. 0 disables expansion.
     #[serde(default)]
@@ -67,6 +74,23 @@ pub struct SearchOutput {
     /// Open questions the record has registered on this territory.
     pub open_questions: Vec<RecordOut>,
     pub truncated: usize,
+    /// A record your view refused that would have been a confident match —
+    /// present only when the outcome above is less than confident. It is a
+    /// disclosure, not an answer: to read it as one, re-ask with
+    /// `full_history: true`, where it comes back labeled by its state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub beyond_view: Option<BeyondViewOut>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct BeyondViewOut {
+    /// How much of the question it covers, by the same rule a confident
+    /// match is judged.
+    pub coverage: f64,
+    /// How many view-refused records matched at all.
+    pub count: usize,
+    #[serde(flatten)]
+    pub record: RecordOut,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -218,7 +242,9 @@ impl TacitServer {
     )]
     fn search(&self, Parameters(params): Parameters<SearchParams>) -> Json<SearchOutput> {
         let mut store = self.store.lock().expect("store lock");
-        let spec = if params.include_proposed {
+        let spec = if params.full_history {
+            ViewSpec::now().with_states(StateFilter::All)
+        } else if params.include_proposed {
             ViewSpec::now().with_states(StateFilter::PromotedAndProposed)
         } else {
             ViewSpec::now()
@@ -272,6 +298,11 @@ impl TacitServer {
                     .map(|g| RecordOut::of(&store.ledger, g))
                     .collect(),
                 truncated: found.truncated,
+                beyond_view: found.beyond_view.as_ref().map(|beyond| BeyondViewOut {
+                    coverage: (beyond.coverage * 100.0).round() / 100.0,
+                    count: beyond.count,
+                    record: RecordOut::of(&store.ledger, beyond.record),
+                }),
             }
         };
         store.record_call(

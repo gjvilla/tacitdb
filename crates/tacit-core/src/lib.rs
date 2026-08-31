@@ -56,7 +56,7 @@ pub use projection::{
 pub use record::{Draft, Record};
 pub use redact::{RedactReport, redact_store};
 pub use retrieval::{
-    Budget, Direction, Expansion, Fusion, Item, Outcome, Probe, Query, Ranking, Retrieved, Retriever,
+    BeyondView, Budget, Direction, Expansion, Fusion, Item, Outcome, Probe, Query, Ranking, Retrieved, Retriever,
     TextIndex, Via, fuse, indexable_text, tokenize,
 };
 pub use state::{ClaimState, GapState, HypothesisState, RecordState};

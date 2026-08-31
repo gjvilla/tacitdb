@@ -64,7 +64,7 @@ question passed on the re-run without being touched.
 
 ## Known shortfalls, and where each was filed
 
-Five questions carry `pending` markers. The rule from day one: no marker
+Four questions carry `pending` markers. The rule from day one: no marker
 without an `explain --proposals` run — and this suite's first week showed why
 that is necessary and not sufficient. Three questions once filed here as
 meaning faults (P-02, P-03, P-17, on real evidence of tight ranking margins)
@@ -77,10 +77,13 @@ list. Measurement filed them; a better instrument re-filed them.
   U-23 here: the right record is surfaced (P-12 at rank two, after two
   earlier filings under U-41 and then U-43 each peeled a real layer) and the
   confidence rule declines it at coverage 0.31–0.48.
-- **P-08** — the answering record is Rejected-state, and the default view
-  admits promoted claims only: absent from both rankers' candidates by
-  design. A fair question about a refusal cannot currently be answered at all
-  (U-40).
+- **P-08** — recovered 2026-08-31 (D-0048), and the recovery kept the
+  ratchet: the answering record is Rejected-state and still never enters the
+  governed answer. What changed is that the view's refusal is disclosed —
+  the engine reports the exact record the view withheld, at the same bars a
+  confident match must clear, and a consumer re-asks with the full-history
+  view where it comes back labeled rejected. Graded `pointed+beyond`: not an
+  answer, a correct pointer.
 - **P-22** — bluffs at coverage = reach = 1.00; the corpus speaks every word
   of the question and does not settle it. Its 1.6% margin first showed
   U-38's margin clause was load-bearing; when the calibration table then put
@@ -99,7 +102,7 @@ list. Measurement filed them; a better instrument re-filed them.
 | P-05 | what does yanking a file from the index mean | answer PEP-0592 | Greg Villa | if the slice repins |
 | P-06 | how does an installer record the url a package was installed from | answer PEP-0610 | Greg Villa | if the slice repins |
 | P-07 | which fields of pyproject.toml hold a project's metadata | answer PEP-0621 | Greg Villa | if the slice repins |
-| P-08 | why was a node modules style local directory turned down | answer PEP-0582 (pending U-40) | Greg Villa | if the slice repins |
+| P-08 | why was a node modules style local directory turned down | answer PEP-0582 | Greg Villa | if the slice repins |
 | P-09 | how can license terms be stated precisely in package metadata | answer PEP-0639 (pending U-23) | Greg Villa | if the slice repins |
 | P-10 | what stops pip writing into an operating system owned environment | answer PEP-0668 | Greg Villa | if the slice repins |
 | P-11 | how can an index expose a wheel's metadata without serving the whole archive | answer PEP-0658 | Greg Villa | if the slice repins |

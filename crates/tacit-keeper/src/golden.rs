@@ -69,17 +69,32 @@ pub enum Verdict {
     /// Abstained, but did not surface the registered question that covers the
     /// territory. Gap detection's to fix.
     GapNotCited,
+    /// The governed view does not hold the answer, and retrieval disclosed
+    /// the exact record the view refused (U-40, D-0048). A pass: a consumer
+    /// following the instructions re-asks with the wider view and lands on
+    /// the agreed record — the engine neither asserted from outside the
+    /// governed view nor pretended the corpus was empty.
+    PointedBeyondView,
 }
 
 impl Verdict {
     pub fn is_pass(self) -> bool {
-        matches!(self, Verdict::Answered | Verdict::Abstained | Verdict::AbstainedWithGap)
+        matches!(
+            self,
+            Verdict::Answered
+                | Verdict::Abstained
+                | Verdict::AbstainedWithGap
+                | Verdict::PointedBeyondView
+        )
     }
 
     /// Whose it is to address, per the failure taxonomy.
     pub fn owner(self) -> &'static str {
         match self {
-            Verdict::Answered | Verdict::Abstained | Verdict::AbstainedWithGap => "nobody — a pass",
+            Verdict::Answered
+            | Verdict::Abstained
+            | Verdict::AbstainedWithGap
+            | Verdict::PointedBeyondView => "nobody — a pass",
             Verdict::Missed => "retrieval: recall",
             Verdict::Underconfident => "retrieval: calibration",
             Verdict::WrongAnchor => "retrieval: ranking",
@@ -98,6 +113,7 @@ impl Verdict {
             Verdict::Bluffed => "BLUFFED",
             Verdict::WrongAnchor => "WRONG ANCHOR",
             Verdict::GapNotCited => "GAP NOT CITED",
+            Verdict::PointedBeyondView => "pointed+beyond",
         }
     }
 }
@@ -498,10 +514,17 @@ fn grade(ledger: &Ledger, question: &GoldenQuestion, found: &Retrieved<'_>) -> G
     let verdict = match &question.expect {
         Expectation::Answer(expected) => {
             let found_it = top.iter().any(|a| a == expected);
+            // A disclosure counts only when it names the agreed record: the
+            // view refused the answer and retrieval said exactly which one.
+            let pointed = found
+                .beyond_view
+                .as_ref()
+                .is_some_and(|beyond| anchor_of(ledger, beyond.record) == *expected);
             match (found_it, found.outcome == Outcome::Matches) {
                 (true, true) => Verdict::Answered,
                 (true, false) => Verdict::Underconfident,
                 (false, true) => Verdict::WrongAnchor,
+                (false, false) if pointed => Verdict::PointedBeyondView,
                 (false, false) => Verdict::Missed,
             }
         }
