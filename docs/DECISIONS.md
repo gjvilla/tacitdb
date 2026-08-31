@@ -2283,6 +2283,65 @@ consistent with similarity never conferring anything (D-0020, D-0046).
 
 ---
 
+## D-0049 · No query language: the first observed agent session asked for parameters
+
+```yaml
+id: D-0049
+state: promoted
+author: Greg Villa
+recorded: 2026-08-31
+valid_from: 2026-08-31
+source: resolution of U-3 on its own trigger — observed real agent usage of
+  the v1 MCP toolset, made observable first and then observed
+evidence: [crates/tacit-mcp/src/store.rs, crates/tacit-mcp/src/server.rs,
+  docs/REGISTER.md]
+review_trigger: when a second, differently-shaped agent workload leaves an
+  audit this reading does not cover; any move toward a query language starts
+  by reading the accumulated audits, which now exist to be read
+```
+
+**Assertion.** The v1 toolset gains no query language, and for the first
+time that is a decision made on evidence rather than deferral. U-3's
+trigger read "observed real agent usage" — and usage was unobservable as
+built, because the audit died with the host process. So the audit now
+persists beside a durable store, plain lines appended and read back at
+open, telemetry rather than record: losing a tail line in a crash loses a
+data point, never knowledge. Then the usage happened: a real agent session
+drove all ten tools against this repository's corpus over stdio, with every
+call recorded — why-questions answered with provenance envelopes in one
+call each, the search-to-history chain walked, both time axes probed, the
+inbox and the contradictions read, and two records written back: a
+proposed claim and a registered question, both stating faults the session
+itself found, both now waiting for a person, which is the write path doing
+exactly what D-0012 designed.
+
+**What the observation showed.** Every friction found decomposes into a
+typed parameter or a bound on an existing tool; nothing observed wanted
+composition, expressions, or a grammar. The open-questions listing could
+not be narrowed, so a question about one topic bought all eighteen gaps —
+it now takes a query, ranked by the same rule the search's gap offers use,
+because two rankings for one intent would drift apart. The pending inbox
+returned one hundred forty-three full records for being asked — both
+listings now take a limit and still report the true total, so a bound is
+never mistaken for the whole. And record-time travel on a store synced
+this morning honestly answers "not in the record" about last week — the
+as-of output now publishes the valid-time answer beside it, read from the
+envelope the ingest already fills, so the axis the question usually means
+is visible even where the store's own memory is young. The multi-call
+chains, by contrast, earned no composition: each step is a choice point
+where the agent reads before deciding, and a language that batched them
+would save nothing observed.
+
+**What is deliberately not built.** An entity-centric read ("everything
+about X") was imagined during the session and never actually reached for —
+it stays unbuilt for exactly the reason this record exists: U-3 waited
+eight days for evidence rather than taste, and the next tool should too.
+The host also accepts unknown arguments silently, noted and left, pending
+a session it actually misleads. The audit files now accumulate; whoever
+next re-reads this decision starts by reading them.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

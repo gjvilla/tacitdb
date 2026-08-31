@@ -211,7 +211,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let durable = ledger.journal_path().map(|p| p.display().to_string());
-    let state = Arc::new(Mutex::new(Store::new(ledger)));
+    // The audit lives beside the store when there is one: usage of a durable
+    // corpus is worth observing (U-3's trigger is exactly that observation),
+    // and a scratch ledger's usage dies with it, consistently.
+    let state = match &store {
+        Some(path) => {
+            let audit = path.with_extension("audit");
+            Arc::new(Mutex::new(Store::new(ledger).with_audit(audit)))
+        }
+        None => Arc::new(Mutex::new(Store::new(ledger))),
+    };
     eprintln!(
         "tacit-mcp: serving {} records on stdio ({})",
         state.lock().expect("store lock").ledger.log().len(),

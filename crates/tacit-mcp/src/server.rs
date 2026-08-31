@@ -115,6 +115,28 @@ pub struct SearchItem {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OpenQuestionsParams {
+    /// Narrow to open questions your question meets, ranked by how much of
+    /// it each covers. Omit to list them all (up to `limit`). Added when the
+    /// first recorded agent session asked about one topic and had to read
+    /// every registered gap to find it (U-3, D-0049).
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Maximum questions returned. Defaults to 25.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PendingParams {
+    /// Maximum proposals returned, newest last. Defaults to 25 — the first
+    /// recorded agent session received one hundred forty-three full records
+    /// for asking (U-3, D-0049). `count` still reports the true total.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RecordParams {
     /// A record id, as returned by `tacit_search` (`rec_...`).
     pub record_id: String,
@@ -138,9 +160,19 @@ pub struct AsOfParams {
 pub struct AsOfOutput {
     pub record_id: String,
     pub at: String,
-    /// What the record said at that instant.
+    /// What this store said at that instant — record time, which begins when
+    /// a store first learns a record. A store synced this morning answers
+    /// "not in the record" for yesterday, honestly: it did not exist then.
     pub state_then: String,
     pub state_now: String,
+    /// Whether the record's own claim held at that instant — valid time, the
+    /// axis the question "what was true then?" usually means. Read from the
+    /// envelope the ingest filled, so it reaches corpus history a fresh
+    /// store's record time cannot (U-3, D-0049).
+    pub valid_then: bool,
+    pub valid_from: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<String>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -363,18 +395,37 @@ impl TacitServer {
 
     #[tool(
         name = "tacit_open_questions",
-        description = "Every registered open question — things the organization knows it has not \
-                       decided. Cite these when the record cannot answer something."
+        description = "Registered open questions — things the organization knows it has not \
+                       decided. Pass a query to get the ones your question meets; cite these \
+                       when the record cannot answer something."
     )]
-    fn open_questions(&self) -> Json<RecordsOutput> {
+    fn open_questions(&self, Parameters(params): Parameters<OpenQuestionsParams>) -> Json<RecordsOutput> {
+        let limit = params.limit.unwrap_or(25).clamp(1, 200);
         let mut store = self.store.lock().expect("store lock");
-        let records: Vec<RecordOut> = store
-            .ledger
-            .registered_gaps()
-            .iter()
-            .map(|r| RecordOut::of(&store.ledger, r))
-            .collect();
-        let output = RecordsOutput { count: records.len(), records };
+        let records: Vec<RecordOut> = match &params.query {
+            // Ranked by the same rule the search's gap offers use, because a
+            // second ranking for the same intent would drift from the first.
+            Some(question) => {
+                let mut query = Query::text(question);
+                query.gap_budget = limit;
+                let retriever = store.index.retriever(
+                    &store.ledger,
+                    &store.projection,
+                    ViewSpec::now(),
+                );
+                let found = retriever.retrieve(&query);
+                found.gaps.iter().map(|r| RecordOut::of(&store.ledger, r)).collect()
+            }
+            None => store
+                .ledger
+                .registered_gaps()
+                .iter()
+                .take(limit)
+                .map(|r| RecordOut::of(&store.ledger, r))
+                .collect(),
+        };
+        let total = store.ledger.registered_gaps().len();
+        let output = RecordsOutput { count: total, records };
         store.record_call("tacit_open_questions", "", format!("{} open", output.count));
         Json(output)
     }
@@ -391,11 +442,20 @@ impl TacitServer {
             .parse()
             .map_err(|_| bad_request(format!("{:?} is not an RFC3339 instant", params.at)))?;
         let mut store = self.store.lock().expect("store lock");
+        let record = store
+            .ledger
+            .record(id)
+            .ok_or_else(|| bad_request(format!("{id} is not in the record")))?;
+        let envelope = record.envelope();
+        let (valid_from, valid_to) = (envelope.valid_from(), envelope.valid_to());
         let output = AsOfOutput {
             record_id: id.to_string(),
             at: at.to_string(),
             state_then: state_label(store.ledger.state_of_at(id, at)),
             state_now: state_label(store.ledger.state_of(id)),
+            valid_then: at >= valid_from && valid_to.is_none_or(|to| at < to),
+            valid_from: valid_from.to_string(),
+            valid_to: valid_to.map(|to| to.to_string()),
         };
         store.record_call("tacit_as_of", params.at.clone(), output.state_then.clone());
         Ok(Json(output))
@@ -426,14 +486,23 @@ impl TacitServer {
                        agents have proposed. A draft its own author has already replaced is \
                        counted separately rather than listed twice."
     )]
-    fn pending_proposals(&self) -> Json<PendingOutput> {
+    fn pending_proposals(&self, Parameters(params): Parameters<PendingParams>) -> Json<PendingOutput> {
+        let limit = params.limit.unwrap_or(25).clamp(1, 200);
         let mut store = self.store.lock().expect("store lock");
         let pending = store.ledger.pending_proposals();
         let superseded_and_not_queued = pending.superseded.len();
-        let records: Vec<RecordOut> =
-            pending.queued.iter().map(|r| RecordOut::of(&store.ledger, r)).collect();
-        let output =
-            PendingOutput { count: records.len(), records, superseded_and_not_queued };
+        let total = pending.queued.len();
+        // The window keeps the newest: an agent that just proposed should
+        // see its record in the inbox it lands in, and `count` holding the
+        // true total is what keeps a window from being mistaken for the
+        // queue (U-30's rule, restated for a bounded listing).
+        let records: Vec<RecordOut> = pending
+            .queued
+            .iter()
+            .skip(total.saturating_sub(limit))
+            .map(|r| RecordOut::of(&store.ledger, r))
+            .collect();
+        let output = PendingOutput { count: total, records, superseded_and_not_queued };
         store.record_call(
             "tacit_pending_proposals",
             "",

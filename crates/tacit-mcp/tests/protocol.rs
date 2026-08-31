@@ -179,7 +179,9 @@ fn an_agent_can_propose_but_what_it_proposes_stays_proposed() {
     assert_eq!(fetched["author_kind"], "agent");
     assert!(fetched["state"].as_str().unwrap().contains("Proposed"));
 
-    // It is in the keeper's inbox, waiting on a person.
+    // It is in the keeper's inbox, waiting on a person — and the default
+    // window keeps the newest, so a fresh proposal is visible without asking
+    // for the whole queue (D-0049).
     let pending = host.call("tacit_pending_proposals", json!({}));
     let mine = pending["records"]
         .as_array()
@@ -188,12 +190,14 @@ fn an_agent_can_propose_but_what_it_proposes_stays_proposed() {
         .filter(|r| r["author"] == "test-agent")
         .count();
     assert_eq!(mine, 1);
-    // The inbox counts what it lists, and reports separately anything a later
-    // draft replaced — a queue that quietly drops records is how a reviewer
-    // comes to believe they have seen everything (U-30).
+    // The count is the queue's truth, not the window's length: a bounded
+    // listing must never be mistaken for everything unreviewed (U-30's rule,
+    // restated for a limit). Asking for one record leaves the count whole.
+    let bounded = host.call("tacit_pending_proposals", json!({"limit": 1}));
+    assert_eq!(bounded["records"].as_array().unwrap().len(), 1);
     assert_eq!(
-        pending["count"].as_u64().unwrap() as usize,
-        pending["records"].as_array().unwrap().len()
+        bounded["count"].as_u64().unwrap(),
+        pending["count"].as_u64().unwrap()
     );
     assert!(pending["superseded_and_not_queued"].is_number());
 
