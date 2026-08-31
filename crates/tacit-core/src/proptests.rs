@@ -118,6 +118,7 @@ mod reference {
             K::Gap => RecordState::Gap(GapState::Registered),
             K::Hypothesis => RecordState::Hypothesis(HypothesisState::Registered),
             K::Verdict => RecordState::Verdict,
+            K::Redaction => RecordState::Redaction,
         }
     }
 

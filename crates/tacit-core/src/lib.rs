@@ -23,12 +23,14 @@ mod projection;
 #[cfg(test)]
 mod proptests;
 mod record;
+mod redact;
 mod retrieval;
 mod state;
 mod validity;
 mod value;
 
 pub use content::{
+    REDACTED, RedactionContent, RedactionScope,
     ClaimContent, Content, GapContent, HypothesisContent, RecordKind, RetireReason, ScoreOutcome, SetBasis,
     VerdictAction, VerdictContent, WithdrawReason,
 };
@@ -37,6 +39,7 @@ pub use embedding::{
 };
 pub use entity::Entity;
 pub use envelope::{
+    RedactionMark,
     Author, AuthorKind, ENVELOPE_VERSION, Envelope, Evidence, ReviewTrigger, SourceRef,
 };
 pub use error::Error;
@@ -51,6 +54,7 @@ pub use projection::{
     PropertyClaim, StateFilter, ViewSpec,
 };
 pub use record::{Draft, Record};
+pub use redact::{RedactReport, redact_store};
 pub use retrieval::{
     Budget, Direction, Expansion, Fusion, Item, Outcome, Probe, Query, Ranking, Retrieved, Retriever,
     TextIndex, Via, fuse, indexable_text, tokenize,

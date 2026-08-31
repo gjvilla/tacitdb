@@ -53,6 +53,15 @@ pub enum Error {
     )]
     UnstatedWithdrawReason,
 
+    /// A redaction with no stated ground is indistinguishable from tampering.
+    #[error("a redaction must state its reason — the legal basis or the request's provenance")]
+    EmptyRedactionReason,
+
+    /// A husk whose mark names no redaction record is a forgery, not a
+    /// removal: the receipt is what separates the two, and it is missing.
+    #[error("record {record} is marked redacted by {by}, which is not a redaction of it")]
+    UnattestedRedaction { record: RecordId, by: RecordId },
+
     #[error("a {proposed} cannot supersede {prior}, which is a {replaced}")]
     SupersedesDifferentKind {
         prior: RecordId,

@@ -72,7 +72,7 @@ impl HashingEmbedder {
     /// FNV-1a, chosen because it is short, stable across platforms and
     /// versions, and needs no dependency. A stored index depends on this
     /// staying fixed, which is what `model_id` records.
-    fn hash(text: &str, seed: u64) -> u64 {
+    pub(crate) fn hash(text: &str, seed: u64) -> u64 {
         let mut hash = 0xcbf2_9ce4_8422_2325 ^ seed;
         for byte in text.as_bytes() {
             hash ^= u64::from(*byte);

@@ -43,6 +43,11 @@ pub struct RecordOut {
     /// Labels of the entities this record is about.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub about: Vec<String>,
+    /// Present when part of this record was withheld by a declared redaction
+    /// (U-11): the id of the redaction record that ordered it, whose reason
+    /// states the ground. Absent means nothing was ever removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_by: Option<String>,
 }
 
 impl RecordOut {
@@ -88,6 +93,7 @@ impl RecordOut {
                 .filter_map(|e| ledger.entity(*e))
                 .map(|e| format!("{}:{}", e.kind(), e.label()))
                 .collect(),
+            redacted_by: record.envelope().redacted().map(|mark| mark.by.to_string()),
         }
     }
 }

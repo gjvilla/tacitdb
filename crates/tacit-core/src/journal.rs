@@ -21,7 +21,7 @@
 //! does.
 
 use crate::content::Content;
-use crate::envelope::{Author, Evidence, ReviewTrigger, SourceRef};
+use crate::envelope::{Author, Evidence, RedactionMark, ReviewTrigger, SourceRef};
 use crate::error::Error;
 use crate::id::{EntityId, RecordId};
 use crate::measurement::MeasurementTarget;
@@ -58,6 +58,11 @@ pub enum Event {
         review_trigger: Option<ReviewTrigger>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         supersedes: Option<RecordId>,
+        /// The receipt a redaction rewrite left, when part of this event was
+        /// withheld (U-11). Only a rewrite writes it; a live append cannot,
+        /// and a mark that names no redaction record refuses to load.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        redacted: Option<RedactionMark>,
         content: Content,
     },
     /// Measurements are mutable in place, so the log is last-write-wins on

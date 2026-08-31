@@ -269,6 +269,10 @@ impl Projection {
                 }
             }
             Content::Hypothesis(_) => {}
+            // A redaction changes no state: the husk it later leaves keeps
+            // the record's kind and history, and this fold never sees the
+            // withheld text either way.
+            Content::Redaction(_) => {}
             Content::Verdict(v) => {
                 for (target, new_state) in v.action.effects() {
                     if let RecordState::Claim(state) = new_state {
@@ -504,7 +508,8 @@ impl<'a> GraphView<'a> {
             Content::Gap(_) | Content::Hypothesis(_) => self.admits_gap(&slot),
             // A verdict is the mechanism of state change, not content to
             // retrieve or traverse; its provenance is read through `history`.
-            Content::Verdict(_) => false,
+            // A redaction declaration is mechanism the same way.
+            Content::Verdict(_) | Content::Redaction(_) => false,
         }
     }
 

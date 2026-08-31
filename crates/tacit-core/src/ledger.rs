@@ -1,6 +1,6 @@
 use crate::content::{ClaimContent, Content, RecordKind, VerdictAction, WithdrawReason};
 use crate::entity::Entity;
-use crate::envelope::{Author, AuthorKind, Envelope};
+use crate::envelope::{RedactionMark, Author, AuthorKind, Envelope};
 use crate::error::Error;
 use crate::id::{EntityId, RecordId};
 use crate::journal::{Event, Journal, Recovery};
@@ -282,7 +282,7 @@ impl Ledger {
 
         self.validate(&draft, recorded_at)?;
         let id = RecordId::mint();
-        self.write(id, draft, recorded_at, ENVELOPE_VERSION)
+        self.write(id, draft, recorded_at, ENVELOPE_VERSION, None)
     }
 
     /// Every check an append runs, with nothing mutated. Replay calls this too,
@@ -347,6 +347,19 @@ impl Ledger {
                 }
                 self.check_verdict(&verdict.action)?;
             }
+            Content::Redaction(redaction) => {
+                // Removal is a person's act, like a verdict, and for the same
+                // reason: no sequence of agent calls may order data destroyed.
+                if draft.author.kind != AuthorKind::Human {
+                    return Err(Error::VerdictRequiresHumanAuthor);
+                }
+                if !self.records.contains_key(&redaction.target) {
+                    return Err(Error::UnknownRecord(redaction.target));
+                }
+                if redaction.reason.trim().is_empty() {
+                    return Err(Error::EmptyRedactionReason);
+                }
+            }
         }
         Ok(())
     }
@@ -359,6 +372,7 @@ impl Ledger {
         draft: Draft,
         recorded_at: Timestamp,
         envelope_version: u16,
+        redacted: Option<RedactionMark>,
     ) -> Result<RecordId, Error> {
         if envelope_version != ENVELOPE_VERSION {
             return Err(Error::UnsupportedEnvelopeVersion {
@@ -380,6 +394,7 @@ impl Ledger {
                 evidence: draft.evidence.clone(),
                 review_trigger: draft.review_trigger.clone(),
                 supersedes: draft.supersedes,
+                redacted: redacted.clone(),
                 content: draft.content.clone(),
             };
             journal.append(&event)?;
@@ -394,6 +409,7 @@ impl Ledger {
             draft.evidence,
             draft.review_trigger,
             draft.supersedes,
+            redacted,
         );
         self.commit(Record::new(id, envelope, draft.content), recorded_at);
         Ok(id)
@@ -430,6 +446,25 @@ impl Ledger {
         for event in events {
             ledger.replay(event)?;
         }
+        // A husk is lawful only with its receipt: every redaction mark must
+        // name a redaction record that targets that very husk. Checked after
+        // replay because the declaration legitimately follows its target in
+        // the log — and checked at all because without it, "redacted" would
+        // be a word anyone could write over anything (U-11, D-0047).
+        for record in ledger.records() {
+            if let Some(mark) = record.envelope().redacted() {
+                let lawful = ledger.records.get(&mark.by).is_some_and(|r| {
+                    matches!(r.content(), Content::Redaction(redaction)
+                        if redaction.target == record.id())
+                });
+                if !lawful {
+                    return Err(Error::UnattestedRedaction {
+                        record: record.id(),
+                        by: mark.by,
+                    });
+                }
+            }
+        }
         ledger.journal = Some(journal);
         // Surfaced, not corrected: a log ahead of the clock means the machine's
         // clock moved, and a caller that silently swallowed that would be
@@ -458,6 +493,7 @@ impl Ledger {
                 evidence,
                 review_trigger,
                 supersedes,
+                redacted,
                 content,
             } => {
                 let draft = Draft {
@@ -471,7 +507,7 @@ impl Ledger {
                     content,
                 };
                 self.validate(&draft, recorded_at)?;
-                self.write(id, draft, recorded_at, envelope_version)?;
+                self.write(id, draft, recorded_at, envelope_version, redacted)?;
             }
             Event::Measurement { target, name, value, at, by } => {
                 self.apply_measurement(target, name, value, by, at)?;
@@ -688,6 +724,7 @@ impl Ledger {
             RecordKind::Gap => RecordState::Gap(GapState::Registered),
             RecordKind::Hypothesis => RecordState::Hypothesis(HypothesisState::Registered),
             RecordKind::Verdict => return Some(RecordState::Verdict),
+            RecordKind::Redaction => return Some(RecordState::Redaction),
         };
         for verdict in self.history(id) {
             if let Some(at) = at

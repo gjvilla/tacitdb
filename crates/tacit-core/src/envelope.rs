@@ -50,6 +50,22 @@ pub struct Evidence {
     pub span: Option<String>,
 }
 
+/// The receipt a redaction rewrite leaves on what it withheld (U-11, D-0047).
+///
+/// `by` names the redaction record that ordered the removal — the permanent,
+/// appended declaration of who, why, and how much — and a store refuses to
+/// open if the mark points at nothing, so a hand-written husk cannot pose as
+/// a lawful one. `fingerprint` is a 64-bit hash of the event line as it stood
+/// before the rewrite: enough to *match* a retained original (a backup, an
+/// upstream document) against what was removed, and deliberately not claimed
+/// as cryptographic proof — that upgrade is named in the register rather than
+/// implied here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedactionMark {
+    pub by: RecordId,
+    pub fingerprint: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewTrigger {
     pub due_at: Option<Timestamp>,
@@ -69,6 +85,7 @@ pub struct Envelope {
     evidence: Vec<Evidence>,
     review_trigger: Option<ReviewTrigger>,
     supersedes: Option<RecordId>,
+    redacted: Option<RedactionMark>,
     version: u16,
 }
 
@@ -83,6 +100,7 @@ impl Envelope {
         evidence: Vec<Evidence>,
         review_trigger: Option<ReviewTrigger>,
         supersedes: Option<RecordId>,
+        redacted: Option<RedactionMark>,
     ) -> Self {
         Self {
             author,
@@ -93,12 +111,19 @@ impl Envelope {
             evidence,
             review_trigger,
             supersedes,
+            redacted,
             version: ENVELOPE_VERSION,
         }
     }
 
     pub fn author(&self) -> &Author {
         &self.author
+    }
+
+    /// The receipt, when part of this record was withheld by a rewrite.
+    /// `None` is the ordinary case: nothing was ever removed.
+    pub fn redacted(&self) -> Option<&RedactionMark> {
+        self.redacted.as_ref()
     }
 
     pub fn source(&self) -> &SourceRef {

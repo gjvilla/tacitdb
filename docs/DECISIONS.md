@@ -2176,6 +2176,61 @@ the review trigger, and it is not more plumbing.
 
 ---
 
+## D-0047 · Removal is declared in the ledger and performed by a proven rewrite
+
+```yaml
+id: D-0047
+state: promoted
+author: Greg Villa
+recorded: 2026-08-31
+valid_from: 2026-08-31
+source: resolution of U-11, whose trigger — any external or personal-data
+  corpus — fired the day the proposals reader shipped and real authors'
+  names began entering ledgers at runtime
+evidence: [crates/tacit-core/src/redact.rs, crates/tacit-core/src/content.rs,
+  docs/REGISTER.md]
+review_trigger: before the repo goes public (with U-6 and U-17); when the
+  first real erasure request arrives, re-read this against what the request
+  actually asks; if a court or regulator requires provable rather than
+  matchable removal, the fingerprint upgrade and crypto-shredding reopen
+```
+
+**Assertion.** Append-only and erasure meet in two halves, in D-0038's
+shape: record first, rewrite second, witness kept. The *declaration* is a
+new record kind — human-only like a verdict and for the same reason (no
+sequence of agent calls may order data destroyed), refused without an
+existing target and a stated ground, and as permanent as anything in the
+log: the fact of a removal, who ordered it, and why, cannot themselves be
+removed, only their wording withheld. The *removal* is `redact_store`: a
+rewrite that replaces the withheld fields of the target's event with a
+marker, stamps the husk with a receipt naming the declaration and a
+fingerprint of what stood there, proves the rewritten log replays through
+the full grammar, and only then lets it take the old log's place.
+
+**Why this is not a tampering door.** The load path is the only source of
+husks — a live append cannot mint the receipt — and a store refuses to open
+when any husk's receipt fails to name a redaction record targeting that
+very husk. "Redacted" is not a word anyone may write over anything; the
+receipt is the difference between lawful removal and forgery, and the test
+that forges one watches the store refuse it. What survives every scope is
+what replay stands on: entity references, verdict actions, timestamps, and
+the author's *kind* — so a promoted claim stays promoted after its author's
+name is withheld, and a verdict still counts as humanly declared long after
+the ledger stops knowing which human.
+
+**What is deliberately not promised.** The rewrite renames a file; it does
+not scrub disk sectors, backups, or upstream copies — destroying those is
+the operator's legal duty, and crypto-shredding is the registered mechanical
+shape if it is ever wanted. The fingerprint is a 64-bit hash: enough to
+match a retained original against a husk, stated plainly as not
+cryptographic proof. Entity labels and source references sit outside the
+scope and are registered as U-46 rather than half-covered. And the MCP host
+gains only visibility (`redacted_by` on every served record), not a tool:
+declaring a redaction is a keeper-side human act, and applying one is an
+operator running the rewrite against a store nothing else holds open.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

@@ -97,7 +97,11 @@ pub fn indexable_text(record: &Record) -> Option<String> {
         Content::Hypothesis(h) => {
             Some(format!("{} {}", h.statement, h.falsifier.clone().unwrap_or_default()))
         }
-        Content::Verdict(_) => None,
+        // A verdict's provenance is read through `history`; a redaction's
+        // reason is read through the record it marked. Neither is content to
+        // search — and indexing a redaction's reason would rank the removal
+        // receipt for the very text it removed.
+        Content::Verdict(_) | Content::Redaction(_) => None,
     }
 }
 

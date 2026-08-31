@@ -12,6 +12,7 @@ pub enum RecordKind {
     Gap,
     Hypothesis,
     Verdict,
+    Redaction,
 }
 
 impl fmt::Display for RecordKind {
@@ -20,6 +21,7 @@ impl fmt::Display for RecordKind {
             RecordKind::Claim => "claim",
             RecordKind::Gap => "gap",
             RecordKind::Hypothesis => "hypothesis",
+            RecordKind::Redaction => "redaction",
             RecordKind::Verdict => "verdict",
         };
         f.write_str(s)
@@ -34,6 +36,7 @@ pub enum Content {
     Gap(GapContent),
     Hypothesis(HypothesisContent),
     Verdict(VerdictContent),
+    Redaction(RedactionContent),
 }
 
 impl Content {
@@ -43,8 +46,48 @@ impl Content {
             Content::Gap(_) => RecordKind::Gap,
             Content::Hypothesis(_) => RecordKind::Hypothesis,
             Content::Verdict(_) => RecordKind::Verdict,
+            Content::Redaction(_) => RecordKind::Redaction,
         }
     }
+}
+
+/// What stands where withheld text stood. A constant rather than a
+/// convention, so a reader — human or test — matches one string and not a
+/// family of near-misses.
+pub const REDACTED: &str = "[redacted]";
+
+/// A declared removal (U-11, D-0047). The declaration is an ordinary appended
+/// record — human-authored, target checked, reason required — so the *fact*
+/// of a redaction is as permanent as anything else in the log. The removal
+/// itself happens later, in `redact_store`'s rewrite, which replaces the
+/// withheld fields of the target's event and stamps the husk with this
+/// record's id. Declaring without rewriting removes nothing, deliberately:
+/// an append cannot un-write bytes, and pretending otherwise is how systems
+/// leak while their logs say clean.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedactionContent {
+    pub target: RecordId,
+    pub scope: RedactionScope,
+    /// Why this is being removed — the legal basis or the request's
+    /// provenance. Required and non-empty: a removal with no stated ground is
+    /// indistinguishable from tampering, which is the difference this whole
+    /// mechanism exists to preserve.
+    pub reason: String,
+}
+
+/// Which parts of the target's event the rewrite withholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RedactionScope {
+    /// The author's name and detail. Kind survives — replay needs to know a
+    /// human declared a verdict long after it stops knowing which human.
+    Author,
+    /// The record's prose: claim bodies, a gap's question, a hypothesis'
+    /// statement, a verdict's rationale, evidence spans. Structure survives —
+    /// entity references, verdict actions, and timestamps are what replay
+    /// stands on.
+    Content,
+    /// Both.
+    Record,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

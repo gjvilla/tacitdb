@@ -35,6 +35,9 @@ pub enum RecordState {
     Gap(GapState),
     Hypothesis(HypothesisState),
     Verdict,
+    /// A redaction declaration. Like a verdict, it is mechanism rather than
+    /// content: immutable, stateless, and read through the record it marked.
+    Redaction,
 }
 
 impl fmt::Display for RecordState {
@@ -44,6 +47,7 @@ impl fmt::Display for RecordState {
             RecordState::Gap(s) => write!(f, "gap:{s:?}"),
             RecordState::Hypothesis(s) => write!(f, "hypothesis:{s:?}"),
             RecordState::Verdict => f.write_str("verdict"),
+            RecordState::Redaction => f.write_str("redaction"),
         }
     }
 }
