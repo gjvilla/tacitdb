@@ -62,11 +62,11 @@ the misfilings alongside the fixes.
 
 ## Status, stated plainly
 
-Working v1, pre-release, single author. **No license has been chosen yet**
-([U-17](docs/REGISTER.md)) — until one is, this code is source-available to
-read and not yet open source; the crates are marked `publish = false` for the
-same reason. The registrable name is settled ([D-0011](docs/DECISIONS.md)),
-with a counsel review outstanding ([U-6](docs/REGISTER.md)). If you arrived
+Working v1, pre-release, single author. **Dual-licensed MIT OR Apache-2.0**
+([D-0050](docs/DECISIONS.md)) — use it under either, at your option. The
+crates stay `publish = false` until the name's counsel review completes
+([U-6](docs/REGISTER.md)); the registrable name is settled
+([D-0011](docs/DECISIONS.md)). If you arrived
 here with a question the record should answer and it does not, that is
 exactly the signal the register's U-8 is waiting to read — open an issue and
 say which layer you came for.

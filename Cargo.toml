@@ -10,4 +10,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+# Licensed (D-0050) and still unpublished: pushing crates to a registry under
+# the tacitdb name waits on U-6's counsel review, which is a different
+# question from whether the source is free. It is.
 publish = false

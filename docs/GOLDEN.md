@@ -45,12 +45,17 @@ meaning:
   a match. Recall is fine; confidence calibration is not.
 - **G-09** answers confidently from records that merely use the word "storage",
   instead of abstaining to the open question that actually covers it.
-- **G-10** asks about a "licence" where the register writes "license". Vector
-  candidates now bridge that spelling well enough to *reach* the record, which
-  is why this failure moved from bluffing to simply not citing the right open
-  question — but not well enough to pick U-17 out. The question keeps the
-  spelling a person might reasonably type; tuning it to match the corpus would
-  be tuning the instrument to the result.
+- **G-10** asked about a "licence" where the register writes "license", and
+  spent its life as the canonical honest abstention. When the license was
+  decided (D-0050) its expectation became unsatisfiable — an answered gap
+  cannot be cited — so it was re-agreed as answerable in the same change, the
+  shape the stale-trigger check exists for, met by design this time. The
+  question keeps the spelling a person might reasonably type; the
+  abstain-with-citation path it used to exercise moves to G-23. G-22 itself
+  taught a lesson on arrival: drafted expecting abstention, it was graded a
+  bluff — because the record *does* settle it (D-0047 states what redaction
+  does not reach), and the suite was correcting the question's author, not
+  the engine. The agreed answer is the record's, wherever it points.
 
 Two more arrived 2026-08-30 when D-0039's records re-sorted the corpus —
 U-37's drift, visible because it crossed verdict boundaries — and both
@@ -80,7 +85,7 @@ check that no record was written *about* it.
 | G-07 | why was the working name retired | answer D-0011 | Greg Villa | when U-6 resolves |
 | G-08 | what did the prior art survey conclude about building versus adopting | answer D-0008 (pending U-23) | Greg Villa | when a surveyed engine ships the wedge |
 | G-09 | which storage engine does the project use | answer D-0019 (pending U-23) | Greg Villa | when the store stops being an append-only log |
-| G-10 | what licence will the engine ship under | abstain U-17 | Greg Villa | when U-17 resolves |
+| G-10 | what licence will the engine ship under | answer D-0050 | Greg Villa | if the license ever changes |
 | G-15 | what happens in the ledger when a decision record is edited | answer D-0021 | Greg Villa | when the ingest stops being a sync |
 | G-16 | what does the engine do if the machine clock moves backwards | answer D-0022 | Greg Villa | when more than one process writes one log |
 | G-17 | what is recorded when an open question is reworded rather than answered | answer D-0023 | Greg Villa | when a fifth withdrawal reason is wanted |
@@ -92,6 +97,8 @@ check that no record was written *about* it.
 | G-12 | what is the maximum supported cluster size | abstain | Greg Villa | never — this is outside the record by design |
 | G-13 | how many concurrent writers does the store support | answer D-0015 (pending U-23) | Greg Villa | when more than one process may write one store |
 | G-14 | what colour is the logo | abstain | Greg Villa | never — this is outside the record by design |
+| G-22 | can an entity label carrying a person's name be redacted | answer D-0047 | Greg Villa | when U-46 resolves, the answer changes |
+| G-23 | how does the engine deduplicate agent proposals | abstain U-12 | Greg Villa | when U-12 resolves |
 
 ## Vocabulary baseline
 
@@ -131,3 +138,5 @@ Regenerate with `GOLDEN_BASELINE=1 cargo run -p tacit-keeper --example golden`.
 | G-12 | cluster supported |
 | G-13 | concurrent support writer |
 | G-14 | colour logo |
+| G-22 | — |
+| G-23 | deduplicate |

@@ -3,6 +3,7 @@ name = "tacit-core"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 jiff = { version = "0.2.35", features = ["serde"] }

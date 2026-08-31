@@ -3,6 +3,7 @@ name = "tacit-mcp"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 jiff = "0.2.35"

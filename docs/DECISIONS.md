@@ -2342,6 +2342,54 @@ next re-reads this decision starts by reading them.
 
 ---
 
+## D-0050 · The engine ships under MIT OR Apache-2.0, at the user's option
+
+```yaml
+id: D-0050
+state: promoted
+author: Greg Villa
+recorded: 2026-08-31
+valid_from: 2026-08-31
+source: resolution of U-17, declared by the owner when asked directly — the
+  agent prepared the choice, the person made it, which is the write path's
+  own rule applied to the project's paperwork
+evidence: [LICENSE-MIT, LICENSE-APACHE, docs/priors/SUMMARY.md,
+  docs/REGISTER.md]
+review_trigger: relicensing is a one-way door and is not planned; re-read
+  only if a patent claim arrives, a contributor agreement becomes necessary,
+  or counsel's U-6 review surfaces a conflict
+```
+
+**Assertion.** Every crate in this workspace is dual-licensed MIT OR
+Apache-2.0, the downstream user choosing which. The reasoning was on the
+register for eight days before the choice: the priors argue permissive,
+because fork-safety is the answer to single-vendor fragility — the surveyed
+engines that thrived are permissive and the source-available ones carry
+adoption friction the two-layer bet cannot afford. Within permissive, dual
+is the Rust ecosystem's own convention, and it buys both halves at once:
+the MIT text for integrators who want nothing but simplicity, and the
+Apache text for the express patent grant an engine should offer — whose
+trademark exclusion also quietly protects the registrable name, which is
+the U-6 interaction this row predicted when it was written.
+
+**What the license does not decide.** The crates stay `publish = false`:
+whether the source is free and whether crates are pushed to a registry
+under a name counsel has not reviewed are different questions, and the
+second waits on U-6. Contributions are a future question — a single-author
+repository needs no inbound terms today, and inventing them ahead of the
+first contributor would be the register's least favorite kind of work.
+
+**Consequence for the suite, taken in the same breath.** G-10 spent its
+life as the canonical honest abstention — the license question, expected
+to abstain citing U-17 — and this record makes that expectation
+unsatisfiable, which is exactly the two-failures-cancelling shape the
+stale-trigger check was built for after U-5. The question is re-agreed as
+answerable by this record, and the abstain-with-citation path the suite
+must keep exercising moves to a new question citing U-46, which is open
+and expects to stay so until a person is modeled as an entity.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
