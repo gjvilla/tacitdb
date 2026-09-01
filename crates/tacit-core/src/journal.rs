@@ -42,6 +42,11 @@ pub enum Event {
         id: EntityId,
         kind: String,
         label: String,
+        /// The receipt an entity-label redaction left (U-46, D-0053). Only
+        /// the rewrite writes it, and a mark naming no declaration refuses
+        /// to load, exactly as a record husk's does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        redacted: Option<RedactionMark>,
     },
     Record {
         id: RecordId,

@@ -182,7 +182,8 @@ impl Ledger {
         let (kind, label) = (kind.into(), label.into());
         let id = EntityId::mint();
         if let Some(journal) = &mut self.journal {
-            let event = Event::Entity { id, kind: kind.clone(), label: label.clone() };
+            let event =
+                Event::Entity { id, kind: kind.clone(), label: label.clone(), redacted: None };
             journal.append(&event)?;
         }
         self.entities.insert(id, Entity::new(id, kind, label));
@@ -380,8 +381,17 @@ impl Ledger {
                 if draft.author.kind != AuthorKind::Human {
                     return Err(Error::VerdictRequiresHumanAuthor);
                 }
-                if !self.records.contains_key(&redaction.target) {
-                    return Err(Error::UnknownRecord(redaction.target));
+                match redaction.target {
+                    crate::content::RedactionTarget::Record(record) => {
+                        if !self.records.contains_key(&record) {
+                            return Err(Error::UnknownRecord(record));
+                        }
+                    }
+                    crate::content::RedactionTarget::Entity(entity) => {
+                        if !self.entities.contains_key(&entity) {
+                            return Err(Error::UnknownEntity(entity));
+                        }
+                    }
                 }
                 if redaction.reason.trim().is_empty() {
                     return Err(Error::EmptyRedactionReason);
@@ -480,12 +490,29 @@ impl Ledger {
         // name a redaction record that targets that very husk. Checked after
         // replay because the declaration legitimately follows its target in
         // the log — and checked at all because without it, "redacted" would
-        // be a word anyone could write over anything (U-11, D-0047).
+        // be a word anyone could write over anything (U-11, D-0047). Entity
+        // husks answer to the same rule (U-46, D-0053).
+        for entity in ledger.entities.values() {
+            if let Some(mark) = entity.redacted() {
+                let lawful = ledger.records.get(&mark.by).is_some_and(|r| {
+                    matches!(r.content(), Content::Redaction(redaction)
+                        if redaction.target
+                            == crate::content::RedactionTarget::Entity(entity.id()))
+                });
+                if !lawful {
+                    return Err(Error::UnattestedEntityRedaction {
+                        entity: entity.id(),
+                        by: mark.by,
+                    });
+                }
+            }
+        }
         for record in ledger.records() {
             if let Some(mark) = record.envelope().redacted() {
                 let lawful = ledger.records.get(&mark.by).is_some_and(|r| {
                     matches!(r.content(), Content::Redaction(redaction)
-                        if redaction.target == record.id())
+                        if redaction.target
+                            == crate::content::RedactionTarget::Record(record.id()))
                 });
                 if !lawful {
                     return Err(Error::UnattestedRedaction {
@@ -509,8 +536,8 @@ impl Ledger {
 
     fn replay(&mut self, event: Event) -> Result<(), Error> {
         match event {
-            Event::Entity { id, kind, label } => {
-                self.entities.insert(id, Entity::new(id, kind, label));
+            Event::Entity { id, kind, label, redacted } => {
+                self.entities.insert(id, Entity::husk(id, kind, label, redacted));
             }
             Event::Record {
                 id,

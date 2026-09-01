@@ -155,7 +155,10 @@ fn search_abstains_on_what_the_record_does_not_cover() {
 fn open_questions_are_citable() {
     let mut host = Host::start();
     let out = host.call("tacit_open_questions", json!({}));
-    assert!(out["count"].as_u64().unwrap() >= 15, "the register's unknowns are loaded");
+    // The floor was fifteen until 2026-08-31, when the register's open rows
+    // dropped beneath it honestly — thirty-plus resolutions in nine days.
+    // The assertion is that the register is *loaded*, not that it stays big.
+    assert!(out["count"].as_u64().unwrap() >= 8, "the register's unknowns are loaded");
     let first = &out["records"][0];
     assert!(first["text"].as_str().is_some_and(|t| !t.is_empty()));
 }

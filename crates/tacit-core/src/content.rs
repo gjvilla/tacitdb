@@ -64,9 +64,22 @@ pub const REDACTED: &str = "[redacted]";
 /// record's id. Declaring without rewriting removes nothing, deliberately:
 /// an append cannot un-write bytes, and pretending otherwise is how systems
 /// leak while their logs say clean.
+/// What a redaction is aimed at. Tagged on the wire because record and
+/// entity ids serialize as bare ulids a reader cannot tell apart — and
+/// widened from records-only (D-0047) to entities (D-0053) the day after it
+/// shipped, while no durable store yet held a declaration to migrate.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum RedactionTarget {
+    Record(RecordId),
+    /// An entity has one redactable part — its label, where a person modeled
+    /// as an entity would carry their name. Kind survives (it is structure),
+    /// and the scope field is not consulted: a label is all there is.
+    Entity(EntityId),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RedactionContent {
-    pub target: RecordId,
+    pub target: RedactionTarget,
     pub scope: RedactionScope,
     /// Why this is being removed — the legal basis or the request's
     /// provenance. Required and non-empty: a removal with no stated ground is
@@ -86,7 +99,11 @@ pub enum RedactionScope {
     /// entity references, verdict actions, and timestamps are what replay
     /// stands on.
     Content,
-    /// Both.
+    /// The source reference — a URL or citation can carry a person's details
+    /// as surely as a body can (U-46's second gap). The channel survives: it
+    /// names a kind of provenance, not a person.
+    Source,
+    /// Everything above.
     Record,
 }
 

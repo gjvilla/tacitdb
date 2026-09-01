@@ -30,7 +30,7 @@ mod validity;
 mod value;
 
 pub use content::{
-    REDACTED, RedactionContent, RedactionScope,
+    REDACTED, RedactionContent, RedactionScope, RedactionTarget,
     ClaimContent, Content, GapContent, HypothesisContent, RecordKind, RetireReason, ScoreOutcome, SetBasis,
     VerdictAction, VerdictContent, WithdrawReason,
 };

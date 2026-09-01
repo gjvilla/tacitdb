@@ -103,7 +103,7 @@ check that no record was written *about* it.
 | G-12 | what is the maximum supported cluster size | abstain | Greg Villa | never — this is outside the record by design |
 | G-13 | how many concurrent writers does the store support | answer D-0015 (pending U-23) | Greg Villa | when more than one process may write one store |
 | G-14 | what colour is the logo | abstain | Greg Villa | never — this is outside the record by design |
-| G-22 | can an entity label carrying a person's name be redacted | answer D-0047 | Greg Villa | when U-46 resolves, the answer changes |
+| G-22 | can an entity label carrying a person's name be redacted | answer D-0053 | Greg Villa | re-read 2026-08-31 when the answer flipped from "no, and it is recorded why" (D-0047) to "yes" (D-0053); re-read again if the husk or receipt changes shape |
 | G-23 | what happens to a duplicate proposal from an agent | answer D-0051 | Greg Villa | if the fold or the disclosure changes |
 | G-24 | how is the event log compacted when it grows too large | abstain U-24 | Greg Villa | when U-24 resolves |
 

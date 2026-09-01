@@ -62,6 +62,10 @@ pub enum Error {
     #[error("record {record} is marked redacted by {by}, which is not a redaction of it")]
     UnattestedRedaction { record: RecordId, by: RecordId },
 
+    /// The same forgery, worn by an entity's label.
+    #[error("entity {entity} is marked redacted by {by}, which is not a redaction of it")]
+    UnattestedEntityRedaction { entity: EntityId, by: RecordId },
+
     #[error("a {proposed} cannot supersede {prior}, which is a {replaced}")]
     SupersedesDifferentKind {
         prior: RecordId,

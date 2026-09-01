@@ -2499,6 +2499,58 @@ the convention will cause future triggers to name. The quarterly re-read
 
 ---
 
+## D-0053 · Redaction reaches the entity's label and the source's reference
+
+```yaml
+id: D-0053
+state: promoted
+author: Greg Villa
+recorded: 2026-08-31
+valid_from: 2026-08-31
+source: resolution of U-46, built ahead of its trigger on the owner's
+  direction — removal capability is held before the demand, which is the
+  same preparedness U-11 was resolved on
+review_trigger: when a person is actually modeled as an entity in a synced
+  corpus, re-read this against the real shape of that corpus; and with
+  D-0047's own triggers, which govern the mechanism this extends
+```
+
+**Assertion.** The two gaps D-0047 stated plainly are closed with the same
+two-halves mechanism it built. A redaction may now target an entity: the
+declaration carries a tagged target (record or entity — tagged on the wire
+because both ids serialize as bare ulids a reader cannot tell apart, and
+widened the day after the mechanism shipped, while no durable store yet
+held a declaration to migrate). The rewrite husks the entity's label,
+stamps the receipt on the entity event, and the store refuses to open when
+an entity's mark names no declaration of it — the same forgery rule record
+husks answer to. Kind survives, because kind is structure; every record
+about the entity still resolves by id; and a husked entity is no longer
+findable by its label, which means a re-sync of the same upstream would
+mint a fresh entity rather than reunite with the husk — correct, and worth
+knowing: re-importing removed personal data is an operator's act, not a
+collision. The second gap closes as a new scope: `Source` withholds the
+envelope's source reference — a URL or citation carries a person as surely
+as a body does — while the channel stays, naming a kind of provenance
+rather than anyone in particular. `Record` scope now means all three.
+
+**What a label redaction does not scrub, said where it can be read.**
+Records that mention the person's name in prose keep it — each is its own
+Content-scope declaration, and the entity's own listing enumerates exactly
+the records a full erasure must visit. The primitive stays per-target
+because every removal is a declared act; the walk across them is the
+keeper's workflow, not the engine's guess.
+
+**Ahead of the trigger, on the record.** No corpus yet models a person as
+an entity, and U-46's trigger had not fired. It was built anyway, on the
+owner's direction and on the argument that resolved U-11: a legal removal
+capability is worth holding before the law knocks, and "we will build it
+now" is the one answer an erasure request must never get. What D-0049
+refused for a product feature — building ahead of evidence — is refused
+here too for anything speculative about *shape*: the shape was already
+agreed in the row, and only the build was waiting.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

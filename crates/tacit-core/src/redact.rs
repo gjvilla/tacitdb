@@ -22,8 +22,9 @@
 //! fingerprint is a 64-bit hash: enough to match a retained original against
 //! the husk, not a cryptographic proof of it.
 
-use crate::content::{ClaimContent, Content, REDACTED, RedactionScope};
-use crate::envelope::{Author, Evidence, RedactionMark};
+use crate::content::{ClaimContent, Content, REDACTED, RedactionScope, RedactionTarget};
+use crate::envelope::{Author, Evidence, RedactionMark, SourceRef};
+use crate::id::EntityId;
 use crate::error::Error;
 use crate::id::RecordId;
 use crate::journal::Event;
@@ -57,11 +58,39 @@ pub fn redact_store(path: impl AsRef<Path>) -> Result<RedactReport, Error> {
 
     // Every declaration, in log order — later scopes widen earlier ones.
     let mut orders: BTreeMap<RecordId, Vec<(RecordId, RedactionScope)>> = BTreeMap::new();
+    let mut entity_orders: BTreeMap<EntityId, RecordId> = BTreeMap::new();
     let mut report = RedactReport::default();
     for event in &events {
         if let Event::Record { id, content: Content::Redaction(r), .. } = event {
-            orders.entry(r.target).or_default().push((*id, r.scope));
             report.declared += 1;
+            match r.target {
+                RedactionTarget::Record(record) => {
+                    orders.entry(record).or_default().push((*id, r.scope));
+                }
+                // An entity has one redactable part, so the latest declaration
+                // is the receipt and there are no scopes to widen.
+                RedactionTarget::Entity(entity) => {
+                    entity_orders.insert(entity, *id);
+                }
+            }
+        }
+    }
+
+    for event in &mut events {
+        let (id, mark) = match &*event {
+            Event::Entity { id, redacted, .. } => (*id, redacted.clone()),
+            _ => continue,
+        };
+        let Some(order) = entity_orders.get(&id) else { continue };
+        if mark.is_some_and(|mark| mark.by == *order) {
+            report.already_applied += 1;
+            continue;
+        }
+        let fingerprint = fingerprint_of(event_line(&*event, path)?.as_bytes());
+        if let Event::Entity { label, redacted, .. } = event {
+            *label = REDACTED.into();
+            *redacted = Some(RedactionMark { by: *order, fingerprint });
+            report.rewritten += 1;
         }
     }
 
@@ -81,13 +110,16 @@ pub fn redact_store(path: impl AsRef<Path>) -> Result<RedactReport, Error> {
         // The fingerprint commits to the event exactly as the log held it,
         // taken before anything is touched.
         let fingerprint = fingerprint_of(event_line(&*event, path)?.as_bytes());
-        if let Event::Record { author, evidence, redacted, content, .. } = event {
+        if let Event::Record { author, source, evidence, redacted, content, .. } = event {
             for (_, scope) in pending {
                 if matches!(scope, RedactionScope::Author | RedactionScope::Record) {
                     withhold_author(author);
                 }
                 if matches!(scope, RedactionScope::Content | RedactionScope::Record) {
                     withhold_content(content, evidence);
+                }
+                if matches!(scope, RedactionScope::Source | RedactionScope::Record) {
+                    withhold_source(source);
                 }
             }
             *redacted = Some(RedactionMark { by: latest, fingerprint });
@@ -148,6 +180,12 @@ fn fingerprint_of(bytes: &[u8]) -> String {
 fn withhold_author(author: &mut Author) {
     author.name = REDACTED.into();
     author.detail = None;
+}
+
+/// The reference goes, the channel stays: a URL can carry a person, a kind
+/// of provenance cannot.
+fn withhold_source(source: &mut SourceRef) {
+    source.reference = None;
 }
 
 /// Replace prose, keep structure. Entity references, verdict actions, and
@@ -252,7 +290,7 @@ mod tests {
             .append(draft(
                 Author::human("Keeper"),
                 Content::Redaction(RedactionContent {
-                    target,
+                    target: RedactionTarget::Record(target),
                     scope,
                     reason: "erasure request under the applicable law".into(),
                 }),
@@ -268,7 +306,7 @@ mod tests {
         let refused = ledger.append(draft(
             Author::agent("assistant"),
             Content::Redaction(RedactionContent {
-                target: claim,
+                target: RedactionTarget::Record(claim),
                 scope: RedactionScope::Record,
                 reason: "asked nicely".into(),
             }),
@@ -284,7 +322,7 @@ mod tests {
         let unreasoned = ledger.append(draft(
             Author::human("Keeper"),
             Content::Redaction(RedactionContent {
-                target: claim,
+                target: RedactionTarget::Record(claim),
                 scope: RedactionScope::Record,
                 reason: "  ".into(),
             }),
@@ -294,7 +332,7 @@ mod tests {
         let nothing = ledger.append(draft(
             Author::human("Keeper"),
             Content::Redaction(RedactionContent {
-                target: RecordId::mint(),
+                target: RedactionTarget::Record(RecordId::mint()),
                 scope: RedactionScope::Record,
                 reason: "aimed at nothing".into(),
             }),
@@ -415,6 +453,117 @@ mod tests {
             matches!(refused, Err(Error::UnattestedRedaction { record, .. }) if record == claim),
             "a husk without its receipt is a forgery"
         );
+    }
+
+    /// U-46's first gap, closed and held down: a person modeled as an entity
+    /// loses their name from the label, the receipt sits on the entity, every
+    /// record about the entity still resolves by id, and the bytes are gone.
+    #[test]
+    fn an_entity_label_is_withheld_and_the_graph_survives() {
+        let scratch = Scratch::new("entity");
+        let mut ledger = Ledger::open(scratch.path()).unwrap().ledger;
+        let person = ledger.add_entity("person", "Firstname Lastname").unwrap();
+        let claim = ledger
+            .append(draft(
+                Author::human("Keeper"),
+                Content::Claim(ClaimContent::Text {
+                    body: "chaired the working group through both revisions".into(),
+                    about: vec![person],
+                }),
+            ))
+            .unwrap();
+        let declaration = ledger
+            .append(draft(
+                Author::human("Keeper"),
+                Content::Redaction(RedactionContent {
+                    target: RedactionTarget::Entity(person),
+                    scope: RedactionScope::Record,
+                    reason: "erasure request under the applicable law".into(),
+                }),
+            ))
+            .unwrap();
+        drop(ledger);
+
+        let report = redact_store(scratch.path()).unwrap();
+        assert_eq!(report.rewritten, 1);
+
+        let reopened = Ledger::open(scratch.path()).unwrap().ledger;
+        let entity = reopened.entity(person).unwrap();
+        assert_eq!(entity.label(), REDACTED);
+        assert_eq!(entity.kind(), "person", "kind is structure and survives");
+        assert_eq!(entity.redacted().unwrap().by, declaration);
+        // The record about the entity is untouched and still resolves.
+        assert!(matches!(
+            reopened.record(claim).unwrap().content(),
+            Content::Claim(ClaimContent::Text { about, .. }) if about == &vec![person]
+        ));
+        let text = std::fs::read_to_string(scratch.path()).unwrap();
+        assert!(!text.contains("Lastname"), "the name left the bytes");
+    }
+
+    /// The receipt rule, worn by an entity: a hand-stamped label husk that
+    /// names no declaration refuses to load.
+    #[test]
+    fn a_forged_entity_mark_refuses_to_load() {
+        let scratch = Scratch::new("entity-forged");
+        let (ledger, _claim) = store(scratch.path());
+        drop(ledger);
+        let text = std::fs::read_to_string(scratch.path()).unwrap();
+        let forged: String = text
+            .lines()
+            .map(|line| {
+                if line.contains("\"entity\"") && line.contains("torque") {
+                    line.replacen(
+                        "\"label\":",
+                        "\"redacted\":{\"by\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"fingerprint\":\"0000000000000000\"},\"label\":",
+                        1,
+                    )
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(scratch.path(), forged).unwrap();
+        assert!(matches!(
+            Ledger::open(scratch.path()),
+            Err(Error::UnattestedEntityRedaction { .. })
+        ));
+    }
+
+    /// U-46's second gap: a source reference can carry a person as surely as
+    /// a body can. The reference goes, the channel stays.
+    #[test]
+    fn a_source_reference_is_withheld_under_source_scope() {
+        let scratch = Scratch::new("source");
+        let mut ledger = Ledger::open(scratch.path()).unwrap().ledger;
+        let subject = ledger.add_entity("topic", "torque").unwrap();
+        let claim = ledger
+            .append(Draft::new(
+                author(),
+                SourceRef {
+                    channel: "interview".into(),
+                    reference: Some("notes taken by A Real Person, 2026-08-01".into()),
+                },
+                Content::Claim(ClaimContent::Text {
+                    body: "the fastener seats at twenty four newton metres".into(),
+                    about: vec![subject],
+                }),
+            ))
+            .unwrap();
+        order(&mut ledger, claim, RedactionScope::Source);
+        drop(ledger);
+        redact_store(scratch.path()).unwrap();
+
+        let reopened = Ledger::open(scratch.path()).unwrap().ledger;
+        let envelope = reopened.record(claim).unwrap().envelope();
+        assert_eq!(envelope.source().channel, "interview", "a kind of provenance stays");
+        assert_eq!(envelope.source().reference, None);
+        // Source scope touches nothing else.
+        assert_eq!(envelope.author().name, "A Real Person");
+        let text = std::fs::read_to_string(scratch.path()).unwrap();
+        assert!(!text.contains("notes taken by"));
     }
 
     /// Redacting the author of a verdict keeps replay legal: the name is
