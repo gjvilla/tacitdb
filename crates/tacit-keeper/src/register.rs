@@ -125,6 +125,54 @@ pub fn register_owner(text: &str) -> Option<String> {
     None
 }
 
+/// Open rows whose own trigger names a question that has since been
+/// resolved — the register checked by the machinery that already checks the
+/// golden questions, because two rows sat with fired triggers for days this
+/// week (U-11, U-12) while the suite's questions could not have (D-0052).
+///
+/// Mechanical honesty about scope: a trigger written as prose ("data-model
+/// implementation") is invisible here, and this observes only the subset
+/// that names ids. The quarterly re-read still owns the rest; this owns what
+/// a build can own.
+pub fn stale_unknown_triggers(unknowns: &[ParsedUnknown]) -> Vec<(String, String)> {
+    unknowns
+        .iter()
+        .filter(|row| row.resolved.is_none())
+        .filter_map(|row| {
+            let named = mentioned_ids(&row.trigger, &row.id);
+            let fired = named.iter().find(|id| {
+                is_unknown_id(id)
+                    && unknowns.iter().any(|u| u.id == **id && u.resolved.is_some())
+            })?;
+            Some((row.id.clone(), format!("{fired} is resolved: \"{}\"", row.trigger)))
+        })
+        .collect()
+}
+
+/// Promoted decisions whose review trigger names a question that has since
+/// been resolved. The same check, aimed at Room 1: a decision's trigger is
+/// its promise to be re-read, and rewording the trigger after the re-read is
+/// the acknowledgment that clears the alarm — which supersedes the record
+/// through the ordinary sync, exactly as any edit does (D-0021).
+pub fn stale_decision_triggers(
+    records: &[crate::parse::ParsedRecord],
+    unknowns: &[ParsedUnknown],
+) -> Vec<(String, String)> {
+    records
+        .iter()
+        .filter(|record| record.yaml.get("state").is_some_and(|s| s == "promoted"))
+        .filter_map(|record| {
+            let trigger = record.yaml.get("review_trigger")?;
+            let named = mentioned_ids(trigger, &record.id);
+            let fired = named.iter().find(|id| {
+                is_unknown_id(id)
+                    && unknowns.iter().any(|u| u.id == **id && u.resolved.is_some())
+            })?;
+            Some((record.id.clone(), format!("{fired} is resolved: \"{trigger}\"")))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +196,84 @@ mod tests {
 
         assert!(parsed[1].resolved.is_none());
         assert_eq!(parsed[1].trigger, "Implementation phase");
+    }
+
+    /// D-0052's checks, on fixtures: an open row or a promoted decision whose
+    /// trigger names a resolved question is flagged; naming the resolving
+    /// decision instead is the acknowledgment and stays quiet.
+    #[test]
+    fn a_trigger_naming_a_resolved_question_is_flagged_until_reworded() {
+        let register = "\
+| id | Question | Trigger | Notes |
+|----|----------|---------|-------|
+| U-1 | ~~settled~~ **Resolved 2026-08-23** → D-0012: done | — | kept |
+| U-2 | still open, waiting on the settled one | with U-1 | notes |
+| U-3 | open, acknowledged properly | re-read when D-0012 landed | notes |
+
+*Recorded 2026-08-23. Owner: Greg Villa.*
+";
+        let unknowns = parse_register(register).unwrap();
+        let stale = stale_unknown_triggers(&unknowns);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].0, "U-2");
+        assert!(stale[0].1.contains("U-1 is resolved"));
+
+        let decisions = "\
+---
+
+## D-0001 · A promoted decision resting on the resolved
+
+```yaml
+id: D-0001
+state: promoted
+author: Greg Villa
+recorded: 2026-08-23
+valid_from: 2026-08-23
+source: test
+review_trigger: revisit when U-1 resolves
+```
+
+**Assertion.** Something the suite needs to watch.
+
+---
+
+## D-0002 · One that acknowledged
+
+```yaml
+id: D-0002
+state: promoted
+author: Greg Villa
+recorded: 2026-08-23
+valid_from: 2026-08-23
+source: test
+review_trigger: re-read when D-0012 settled things; still live otherwise
+```
+
+**Assertion.** Quiet, because the re-read happened and says so.
+";
+        let records = crate::parse::parse_corpus(decisions).unwrap();
+        let stale = stale_decision_triggers(&records, &unknowns);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].0, "D-0001");
+    }
+
+    /// The live gate: this repository's own register and decisions carry no
+    /// fired trigger. The first run of this check found one row and fourteen
+    /// decisions in arrears — some fired that same week, one eight days old —
+    /// and every one was re-read and acknowledged in the change that added
+    /// the check (D-0052), which is the only honest way to give an alarm its
+    /// first day.
+    #[test]
+    fn no_trigger_sits_fired_in_this_repository() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let register = std::fs::read_to_string(root.join("docs/REGISTER.md")).unwrap();
+        let unknowns = parse_register(&register).unwrap();
+        let rows = stale_unknown_triggers(&unknowns);
+        assert!(rows.is_empty(), "open rows waiting on resolved questions: {rows:?}");
+        let decisions = std::fs::read_to_string(root.join("docs/DECISIONS.md")).unwrap();
+        let records = crate::parse::parse_corpus(&decisions).unwrap();
+        let stale = stale_decision_triggers(&records, &unknowns);
+        assert!(stale.is_empty(), "promoted decisions resting on fired triggers: {stale:?}");
     }
 
     #[test]

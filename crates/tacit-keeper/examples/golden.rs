@@ -133,7 +133,18 @@ fn main() -> ExitCode {
     // U-5 being resolved — unsatisfiable, and passing.
     let register = std::fs::read_to_string(repo.join("docs/REGISTER.md")).unwrap_or_default();
     let unknowns = tacit_keeper::parse_register(&register).unwrap_or_default();
-    let stale = tacit_keeper::stale_triggers(&questions, &unknowns);
+    let mut stale = tacit_keeper::stale_triggers(&questions, &unknowns);
+    // The same watch, turned on the register's own rows and the decisions'
+    // review triggers (D-0052) — because two rows sat with fired triggers for
+    // days while the questions could not have. Acknowledge by re-reading and
+    // naming the resolving decision; a trigger that keeps naming the resolved
+    // question keeps firing, deliberately.
+    stale.extend(tacit_keeper::register::stale_unknown_triggers(&unknowns));
+    let decisions = std::fs::read_to_string(repo.join("docs/DECISIONS.md"))
+        .ok()
+        .and_then(|text| tacit_keeper::parse::parse_corpus(&text).ok())
+        .unwrap_or_default();
+    stale.extend(tacit_keeper::register::stale_decision_triggers(&decisions, &unknowns));
     if !stale.is_empty() {
         println!("\n\x1b[1mTRIGGERS THAT HAVE FIRED\x1b[0m");
         println!("{}", "─".repeat(64));
@@ -141,9 +152,10 @@ fn main() -> ExitCode {
             println!("  {id}  {why}");
         }
         println!();
-        println!("  Re-read each question against the record as it now stands, then give it");
-        println!("  a trigger that has not already fired. A suite nobody re-reads is a");
-        println!("  record of what was once true.");
+        println!("  Re-read each against the record as it now stands, then reword its");
+        println!("  trigger to acknowledge — naming the decision that resolved things,");
+        println!("  never the resolved question, which is what keeps this alarm quiet");
+        println!("  only when the re-read actually happened.");
     }
 
     // The half of U-27 the phrase check cannot reach. Recorded absence is the

@@ -171,7 +171,9 @@ author: Greg Villa
 recorded: 2026-08-23
 valid_from: 2026-08-23
 source: founding-interview / round 3
-review_trigger: U-3 — revisit after observing real agent usage of the MCP toolset
+review_trigger: re-read 2026-08-31 (D-0052) — the usage this deferral waited
+  for was observed and D-0049 decided from it; kept as the record of declining
+  to decide early
 ```
 
 **Assertion.** Tacit v1 exposes a typed Rust/Python API plus an MCP toolset as its
@@ -227,8 +229,8 @@ author: Greg Villa
 recorded: 2026-08-23
 valid_from: 2026-08-23
 source: founding-interview / round 2
-review_trigger: U-2 — decide after the keeper data-model draft and the prior-art
-  survey are both in hand
+review_trigger: re-read 2026-08-31 (D-0052) — both arrived and D-0015 decided
+  the runtime shape; kept as the reasoning that set that decision up
 ```
 
 **Assertion.** Embedded-library vs server (vs embedded-core-plus-thin-server) is
@@ -251,8 +253,9 @@ author: Greg Villa
 recorded: 2026-08-23
 valid_from: 2026-08-23
 source: founding-interview / round 3
-review_trigger: U-7 — employment-agreement invention-assignment clarity; revisit
-  this record if that review changes anything
+review_trigger: re-read 2026-08-31 (D-0052) — the clarity arrived as D-0038:
+  no assignment clause exists, and the boundary this record draws stands, now
+  backed by fact; revisit only if an employer claim ever surfaces
 ```
 
 **Assertion.** Tacit is a personal project built on personal time. Hard boundary:
@@ -372,8 +375,9 @@ recorded: 2026-08-23
 valid_from: 2026-08-23
 source: phase interview / data-model round
 evidence: [design/001-data-model.md §1.1, §5]
-review_trigger: U-10 — if incremental projection maintenance cannot be proven
-  equivalent to deterministic rebuild, revisit the projection design
+review_trigger: re-read 2026-08-31 (D-0052) — D-0016 proved incremental equals
+  rebuild and property tests hold it, so the revisit this trigger reserved is
+  spent; re-open only if a view parameter ever enters the index
 ```
 
 **Assertion.** Two layers: **entities** are stable identity anchors; **assertions**
@@ -643,7 +647,8 @@ valid_from: 2026-08-24
 source: storage round — resolves U-19
 evidence: [docs/DECISIONS.md — this file is the upstream copy, design/001-data-model.md §3.1]
 review_trigger: when a corpus arrives that has no stable per-record identity in
-  its source document, or when bulk ingest (U-16) needs set verdicts
+  its source document; the set-verdict half was re-read 2026-08-31 (D-0052) —
+  D-0034 built them and a generated sync now takes one verdict, as hoped
 ```
 
 **Assertion.** `docs/DECISIONS.md` and `docs/REGISTER.md` are the copies a
@@ -742,8 +747,8 @@ recorded: 2026-08-24
 valid_from: 2026-08-24
 source: grammar round — resolves U-28
 evidence: [design/001-data-model.md §3.1, docs/REGISTER.md]
-review_trigger: when a fifth reason is wanted, or when set verdicts (U-16) need
-  to close many questions at once
+review_trigger: when a fifth reason is wanted; the set-verdict half was
+  re-read 2026-08-31 (D-0052) — D-0034 settled how one act closes many
 ```
 
 **Assertion.** A question that leaves the register unresolved carries a reason,
@@ -800,7 +805,8 @@ valid_from: 2026-08-24
 source: grammar round — resolves U-30
 evidence: [design/001-data-model.md §3.2, docs/REGISTER.md]
 review_trigger: when an author wants to retract a proposal outright rather than
-  replace it, or when set verdicts (U-16) need to clear many drafts at once
+  replace it; the set-verdict half was re-read 2026-08-31 (D-0052) — D-0034
+  settled it, and D-0051's duplicate fold publishes the pairings it needs
 ```
 
 **Assertion.** A proposed claim that a later record supersedes keeps its state —
@@ -1474,7 +1480,9 @@ recorded: 2026-08-24
 valid_from: 2026-08-24
 source: boundary round — sharpens U-7
 evidence: [docs/DISCLOSURE.md, docs/REGISTER.md]
-review_trigger: when U-7 resolves, or when a second person commits to this
+review_trigger: re-read 2026-08-31 (D-0052) — the resolution came as D-0038,
+  which performed exactly the correction this record deferred while the
+  question was open; still live: when a second person commits to this
   repository
 ```
 
@@ -1729,8 +1737,10 @@ source: U-9's real-language half — the reader shipped 2026-08-29; this is the
   suite and the first measurement, resolving U-9
 evidence: [docs/PEP-GOLDEN.md, scripts/fetch-proposals.sh,
   crates/tacit-keeper/examples/pep_golden.rs, docs/REGISTER.md]
-review_trigger: if the slice repins; when U-40 or U-41 moves; before any claim
-  that retrieval is good (the bar U-23 set now has an outside number)
+review_trigger: if the slice repins; before any claim that retrieval is good
+  (the bar U-23 set now has an outside number). Re-read 2026-08-31 (D-0052) —
+  both unknowns this suite registered were settled by D-0040 and D-0048, and
+  the suite's own recoveries recorded each
 ```
 
 **Assertion.** Retrieval quality is now graded on a corpus this project did not
@@ -1803,9 +1813,9 @@ source: the U-41 repair, run as the register asked — swept over both suites
 evidence: [docs/REGISTER.md, docs/GOLDEN.md, docs/PEP-GOLDEN.md,
   crates/tacit-keeper/examples/fusion_sweep.rs]
 review_trigger: when a third ranker joins the plan, or when the embedder stops
-  being a hashing one — both change what a first place is worth; and when U-43
-  moves, which decides whether rank information below first place can reach a
-  consumer at all
+  being a hashing one — both change what a first place is worth. Re-read
+  2026-08-31 (D-0052) — the budget question moved as D-0041 and the k=0
+  default stood still through it and through D-0044's sweeps
 ```
 
 **Assertion.** The default fusion is reciprocal rank with `k = 0`, and the
@@ -1864,9 +1874,10 @@ source: the U-43 repair — assembly-time excerpting, the budget's own
   arithmetic as the window
 evidence: [docs/REGISTER.md, docs/PEP-GOLDEN.md,
   crates/tacit-core/src/retrieval.rs]
-review_trigger: when U-39 decides how long records are indexed (that decision
-  may subsume this one); if excerpt quality is ever graded and found wanting;
-  when a consumer needs a window the equal share cannot hold
+review_trigger: if excerpt quality is ever graded and found wanting; when a
+  consumer needs a window the equal share cannot hold. Re-read 2026-08-31
+  (D-0052) — the indexing question resolved as D-0044 keeping whole records,
+  so nothing subsumes this and excerpting carries the long-document load
 ```
 
 **Assertion.** A record that would not fit its share of the assembly budget is
@@ -2085,9 +2096,11 @@ source: U-23's model half, finally measured — a real embedding model behind
   the trait D-0020 built for one, graded on both suites against the stand-in
 evidence: [docs/REGISTER.md, crates/tacit-keeper/src/embed.rs,
   crates/tacit-keeper/examples/meaning.rs]
-review_trigger: before any second attempt at a model, lift the plumbing caps
-  U-45 names, then rerun the meaning instrument; if its separation line ever
-  reads SEPARATED, the confidence rule's model half reopens (D-0020 said so)
+review_trigger: if the meaning instrument's separation line ever reads
+  SEPARATED, the confidence rule's model half reopens (D-0020 said so).
+  Re-read 2026-08-31 (D-0052) — the caps were lifted the next day (D-0046)
+  and the ceiling did not move, so a second attempt now means a materially
+  larger model, not more plumbing
 ```
 
 **Assertion.** The keeper gains a real embedding model — `BAAI/bge-small-en-v1.5`
@@ -2189,10 +2202,11 @@ source: resolution of U-11, whose trigger — any external or personal-data
   names began entering ledgers at runtime
 evidence: [crates/tacit-core/src/redact.rs, crates/tacit-core/src/content.rs,
   docs/REGISTER.md]
-review_trigger: before the repo goes public (with U-6 and U-17); when the
-  first real erasure request arrives, re-read this against what the request
-  actually asks; if a court or regulator requires provable rather than
-  matchable removal, the fingerprint upgrade and crypto-shredding reopen
+review_trigger: before the repo goes public (U-6 remains); when the first
+  real erasure request arrives, re-read this against what the request actually
+  asks; if a court or regulator requires provable rather than matchable
+  removal, the fingerprint upgrade and crypto-shredding reopen. Re-read
+  2026-08-31 (D-0052) — the license half settled as D-0050
 ```
 
 **Assertion.** Append-only and erasure meet in two halves, in D-0038's
@@ -2243,9 +2257,10 @@ source: resolution of U-40 — the view question P-08 raised, resolved without
   the heuristic the row warned against
 evidence: [crates/tacit-core/src/retrieval.rs, crates/tacit-mcp/src/server.rs,
   docs/REGISTER.md, docs/PEP-GOLDEN.md]
-review_trigger: when U-3 gives queries a language, revisit whether the view
-  belongs in it; if the disclosure is ever observed teaching agents to
-  routinely re-ask with full history, the default view question reopens
+review_trigger: if the disclosure is ever observed teaching agents to
+  routinely re-ask with full history, the default view question reopens.
+  Re-read 2026-08-31 (D-0052) — the language question closed as D-0049
+  deciding no, so the view stays a parameter and nothing here waits
 ```
 
 **Assertion.** A fair question about a rejected record was unanswerable from
@@ -2436,6 +2451,51 @@ is the meaning half, it belongs to the keeper, and D-0045 measured that
 meaning is not available at this model scale. It waits where U-23 waits,
 and pretending a fingerprint can see it would be the bluff this project
 grades hardest.
+
+---
+
+## D-0052 · A trigger is checked by the build, and acknowledged by a re-read
+
+```yaml
+id: D-0052
+state: promoted
+author: Greg Villa
+recorded: 2026-08-31
+valid_from: 2026-08-31
+source: two rows in one week (U-11, U-12) sat with fired triggers for days —
+  one of them for eight — while the golden questions' triggers could not
+  have, because theirs had a mechanical check and the register's did not
+evidence: [crates/tacit-keeper/src/register.rs, docs/REGISTER.md]
+review_trigger: if the alarm is ever found firing on rows nobody intends to
+  tend, it has become the cried-wolf failure this register names — narrow it
+  or kill it, never mute it
+```
+
+**Assertion.** The stale-trigger check that has guarded the golden questions
+since D-0028 now guards the register's own rows and the decisions' review
+triggers. An open row, or a promoted decision, whose trigger names a
+question that has since been resolved turns the build red — in the golden
+gate and in a test — until someone re-reads it. The acknowledgment *is* the
+re-read: reword the trigger to say what was found, naming the decision that
+resolved things and never the resolved question, which is the one-line
+convention that makes the alarm self-clearing exactly when the work
+happened and not before. For a decision record, that rewording is an edit,
+and the sync supersedes the record with provenance like any other edit —
+re-reading is itself on the record.
+
+**The first run, dealt with in the same change.** One row and fourteen
+decisions were in arrears — including four from this very week, filed while
+this week's own resolutions were being celebrated. Every one was re-read
+and acknowledged before the check was allowed to gate, which is the only
+honest way to give an alarm its first day (D-0028 did the same for the
+question checks, and the register has said twice that an alarm nobody
+reads is worse than none).
+
+**Mechanical honesty about scope.** A trigger written as pure prose is
+invisible to this check, and stays the quarterly re-read's to catch — this
+owns only what a build can own: the subset that names ids, plus everything
+the convention will cause future triggers to name. The quarterly re-read
+(next: 2026-11-23) now starts from a smaller pile.
 
 ---
 
