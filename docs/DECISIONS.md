@@ -2390,6 +2390,55 @@ and expects to stay so until a person is modeled as an entity.
 
 ---
 
+## D-0051 · A duplicate is a witness: disclosed at the door, folded in the inbox, never refused
+
+```yaml
+id: D-0051
+state: promoted
+author: Greg Villa
+recorded: 2026-08-31
+valid_from: 2026-08-31
+source: resolution of U-12, whose trigger — data-model implementation —
+  fired on 2026-08-23 and sat fired for eight days, the second row this week
+  to teach that lesson
+evidence: [crates/tacit-core/src/ledger.rs, crates/tacit-mcp/src/server.rs,
+  docs/REGISTER.md]
+review_trigger: when a reviewer first rules on a folded set, re-read whether
+  the pairing served the set verdict it was built for; the meaning half
+  reopens when U-23 does
+```
+
+**Assertion.** U-12 bundled two questions and practice had already answered
+the first: records carry engine-minted ULIDs (D-0019 replays them; identity
+is the engine's to assign, invariant 3), and content-addressing found its
+real home at the document level, where the sync fingerprints source records
+(D-0021 said so at the time — this record just stops the row pretending
+otherwise). The second question — agents re-proposing duplicates — is
+answered in three moves that are all precedent. The append stays legal:
+byte-identical content from a second author is a second witness to one
+claim, and refusing it would destroy an envelope the record is entitled to.
+The tool discloses: a proposal or a registered question now comes back
+naming the earliest identical record and its state, so an agent knows
+whether it just witnessed, retried, or re-proposed the settled — published,
+not decided, the D-0048 shape. And the inbox folds: a pending proposal
+identical to an earlier pending one keeps its record and loses its separate
+claim on a reviewer's attention, exactly as D-0024 folds superseded drafts,
+with the pairing published so one set verdict (D-0034) can rule on all
+copies as the single editorial act they are. Promote the head and the twin
+re-emerges as its own queue entry, because the question it then poses — do
+we need this twice? — is no longer "which copy".
+
+**The boundary, drawn where the row drew it.** Identity here is
+byte-identity: the fingerprint narrows, an equality check decides, and a
+hash collision costs a comparison rather than a false duplicate. Two
+paraphrases of one claim are invisible to all of this, deliberately — that
+is the meaning half, it belongs to the keeper, and D-0045 measured that
+meaning is not available at this model scale. It waits where U-23 waits,
+and pretending a fingerprint can see it would be the bluff this project
+grades hardest.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

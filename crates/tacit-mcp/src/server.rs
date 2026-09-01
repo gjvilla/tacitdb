@@ -189,6 +189,10 @@ pub struct PendingOutput {
     /// the record and still proposed — reported here rather than dropped, so
     /// the count above is never mistaken for everything unreviewed.
     pub superseded_and_not_queued: usize,
+    /// Pending proposals byte-identical to an earlier pending one, folded
+    /// behind it (U-12): second witnesses, keeping their records and losing
+    /// only their separate claim on a reviewer's attention.
+    pub identical_and_folded: usize,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -223,6 +227,15 @@ pub struct ProposedOutput {
     pub state: String,
     /// What has to happen for this to become something the organization knows.
     pub next_step: String,
+    /// The earliest record carrying byte-identical content, when one exists
+    /// (U-12, D-0051). Your record was still written — a second witness to
+    /// one claim is provenance, not an error — but if this names a promoted
+    /// record the organization already knows it, and if it names a pending
+    /// one, the inbox folds yours behind it rather than queueing it twice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identical_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identical_state: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -491,6 +504,7 @@ impl TacitServer {
         let mut store = self.store.lock().expect("store lock");
         let pending = store.ledger.pending_proposals();
         let superseded_and_not_queued = pending.superseded.len();
+        let identical_and_folded = pending.identical.len();
         let total = pending.queued.len();
         // The window keeps the newest: an agent that just proposed should
         // see its record in the inbox it lands in, and `count` holding the
@@ -502,7 +516,8 @@ impl TacitServer {
             .skip(total.saturating_sub(limit))
             .map(|r| RecordOut::of(&store.ledger, r))
             .collect();
-        let output = PendingOutput { count: total, records, superseded_and_not_queued };
+        let output =
+            PendingOutput { count: total, records, superseded_and_not_queued, identical_and_folded };
         store.record_call(
             "tacit_pending_proposals",
             "",
@@ -532,6 +547,14 @@ impl TacitServer {
             },
             Content::Claim(ClaimContent::Text { body: params.text.clone(), about }),
         );
+        // Disclosed, not decided: the append is legal either way, and the
+        // earliest identical record is named so the agent knows whether it
+        // just witnessed, retried, or re-proposed the settled (U-12).
+        let identical = store
+            .ledger
+            .identical_to(&draft.content)
+            .first()
+            .map(|record| (record.id().to_string(), state_label(store.ledger.state_of(record.id()))));
         let id = store.ledger.append(draft).map_err(|e| bad_request(e.to_string()))?;
         store.refresh();
         store.record_call(
@@ -539,9 +562,12 @@ impl TacitServer {
             params.text.chars().take(80).collect::<String>(),
             id.to_string(),
         );
+        let (identical_to, identical_state) = identical.unzip();
         Ok(Json(ProposedOutput {
             record_id: id.to_string(),
             state: "proposed".into(),
+            identical_to,
+            identical_state,
             next_step: "A person must render a promote verdict before this counts as something \
                         the organization knows."
                 .into(),
@@ -569,6 +595,11 @@ impl TacitServer {
             due_at: None,
             on_event: Some(event),
         });
+        let identical = store
+            .ledger
+            .identical_to(&draft.content)
+            .first()
+            .map(|record| (record.id().to_string(), state_label(store.ledger.state_of(record.id()))));
         let id = store.ledger.append(draft).map_err(|e| bad_request(e.to_string()))?;
         store.refresh();
         store.record_call(
@@ -576,9 +607,12 @@ impl TacitServer {
             params.question.chars().take(80).collect::<String>(),
             id.to_string(),
         );
+        let (identical_to, identical_state) = identical.unzip();
         Ok(Json(ProposedOutput {
             record_id: id.to_string(),
             state: "registered".into(),
+            identical_to,
+            identical_state,
             next_step: "The question is now citable. It closes when a person answers it with a \
                         promoted claim, or withdraws it."
                 .into(),

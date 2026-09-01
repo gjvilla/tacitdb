@@ -50,6 +50,11 @@ pub struct Ledger {
     /// `Envelope::supersedes`, kept because the question a reader actually
     /// asks is "what replaced this?", and scanning for it is the wrong shape.
     replacements: BTreeMap<RecordId, Vec<RecordId>>,
+    /// Content fingerprint → records carrying byte-identical content, in log
+    /// order (U-12). A fold like every other derived map here: replay rebuilds
+    /// it, nothing removes from it, and it narrows — the equality check in
+    /// `identical_to` decides.
+    identical: BTreeMap<u64, Vec<RecordId>>,
     /// Highest record-time appended. The log must be a prefix of time.
     last_recorded_at: Option<Timestamp>,
     panel: BTreeMap<(MeasurementTarget, String), Measurement>,
@@ -91,6 +96,21 @@ impl Ratification {
     }
 }
 
+/// The fingerprint content-identity narrows by (U-12, D-0051). Verdicts and
+/// redactions are mechanism records and never fingerprinted — two identical
+/// promote actions on one target are two rulings, not one ruling twice.
+/// Serialization order is declaration order under serde, so the fingerprint
+/// is deterministic; and it only ever *narrows*, because `identical_to`
+/// verifies equality before calling anything a duplicate.
+fn content_fingerprint(content: &Content) -> Option<u64> {
+    match content {
+        Content::Verdict(_) | Content::Redaction(_) => None,
+        _ => serde_json::to_string(content)
+            .ok()
+            .map(|text| crate::embedding::HashingEmbedder::hash(&text, 0)),
+    }
+}
+
 /// The keeper's inbox, and what was folded out of it.
 ///
 /// Both lists are present rather than one being filtered away silently: a
@@ -109,6 +129,13 @@ pub struct Pending<'a> {
     /// reading a wording its author has already replaced is spent attention,
     /// and seeing two of them is worse than seeing neither.
     pub superseded: Vec<&'a Record>,
+    /// Pending proposals whose content is byte-identical to an earlier pending
+    /// proposal, folded behind it (U-12, D-0051): the head keeps the queue
+    /// slot, each duplicate keeps its record and its envelope — a second
+    /// witness is provenance, not an error — and the pairing is published so
+    /// one set verdict (D-0034) can rule on all of them as the single
+    /// editorial act they are.
+    pub identical: Vec<(RecordId, &'a Record)>,
 }
 
 impl<'a> Pending<'a> {
@@ -417,6 +444,9 @@ impl Ledger {
 
     fn commit(&mut self, record: Record, recorded_at: Timestamp) {
         let id = record.id();
+        if let Some(fp) = content_fingerprint(record.content()) {
+            self.identical.entry(fp).or_default().push(id);
+        }
         if let Content::Verdict(v) = record.content() {
             for touched in v.action.touched() {
                 self.by_target.entry(touched).or_default().push(id);
@@ -770,8 +800,10 @@ impl Ledger {
     /// did, so nothing closes it — and nothing should, because no one decided
     /// anything about it (U-30).
     pub fn pending_proposals(&self) -> Pending<'_> {
-        let mut queued = Vec::new();
+        let mut queued: Vec<&Record> = Vec::new();
         let mut superseded = Vec::new();
+        let mut identical = Vec::new();
+        let mut seen: std::collections::BTreeMap<u64, RecordId> = std::collections::BTreeMap::new();
         for record in self.records() {
             if record.kind() != RecordKind::Claim
                 || self.state_of(record.id()) != Some(RecordState::Claim(ClaimState::Proposed))
@@ -781,13 +813,52 @@ impl Ledger {
             // Whatever became of the successor: a rejected replacement does not
             // revive the draft it replaced. The author moved on, and only the
             // author can move back — by proposing again.
-            if self.replaced_by(record.id()).is_empty() {
-                queued.push(record);
-            } else {
+            if !self.replaced_by(record.id()).is_empty() {
                 superseded.push(record);
+                continue;
+            }
+            // The agents-re-propose-duplicates fold (U-12), scoped to
+            // pending-against-pending: a re-proposal of something already
+            // promoted stands alone in the queue, because its reviewer is
+            // ruling on a different question ("do we need this twice?") than
+            // a duplicate draft's ("which copy carries the set verdict?").
+            match content_fingerprint(record.content()) {
+                Some(fp) => match seen.get(&fp) {
+                    Some(head)
+                        if self
+                            .records
+                            .get(head)
+                            .is_some_and(|h| h.content() == record.content()) =>
+                    {
+                        identical.push((*head, record));
+                    }
+                    _ => {
+                        seen.insert(fp, record.id());
+                        queued.push(record);
+                    }
+                },
+                None => queued.push(record),
             }
         }
-        Pending { queued, superseded }
+        Pending { queued, superseded, identical }
+    }
+
+    /// Records whose content is byte-identical to `content`, in log order.
+    ///
+    /// Identity is verified, not assumed: the fingerprint narrows and an
+    /// equality check decides, so a hash collision costs a comparison rather
+    /// than a false duplicate. Used by hosts to *disclose* — an append of
+    /// identical content stays legal, because two witnesses to one claim are
+    /// provenance and refusing the second would destroy its envelope.
+    pub fn identical_to(&self, content: &Content) -> Vec<&Record> {
+        let Some(fp) = content_fingerprint(content) else { return Vec::new() };
+        self.identical
+            .get(&fp)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.records.get(id))
+            .filter(|record| record.content() == content)
+            .collect()
     }
 
     /// How each promoted claim reached promoted: alone, or as part of a set and
@@ -1897,7 +1968,17 @@ mod tests {
         let mut a = attribute_claim(subject, Author::agent("miner"));
         a.supersedes = Some(original);
         let a = ledger.append(a).unwrap();
-        let mut b = attribute_claim(subject, Author::human("Greg"));
+        // Different content, so the fork is two rival wordings rather than
+        // one wording twice — the identical case has its own fold and test.
+        let mut b = Draft::new(
+            Author::human("Greg"),
+            SourceRef::channel("interview"),
+            Content::Claim(ClaimContent::Attribute {
+                subject,
+                name: "spec_nm".into(),
+                value: Value::Number(25.0),
+            }),
+        );
         b.supersedes = Some(original);
         let b = ledger.append(b).unwrap();
 
@@ -1908,6 +1989,48 @@ mod tests {
         let pending = ledger.pending_proposals();
         assert_eq!(pending.queued.iter().map(|r| r.id()).collect::<Vec<_>>(), vec![a, b]);
         assert_eq!(pending.superseded.len(), 1);
+    }
+
+    /// U-12, held down: a pending proposal identical to an earlier pending
+    /// one keeps its record — a second witness is provenance — and loses its
+    /// separate claim on a reviewer's attention. The pairing is published so
+    /// a set verdict can rule on both as the one act they are, and a
+    /// re-proposal of something already *promoted* stands alone in the
+    /// queue, because "do we need this twice?" is a different question.
+    #[test]
+    fn identical_pending_proposals_fold_behind_the_first() {
+        let (mut ledger, _, subject) = setup();
+        let first = ledger.append(attribute_claim(subject, Author::agent("miner"))).unwrap();
+        let second = ledger.append(attribute_claim(subject, Author::agent("other-agent"))).unwrap();
+
+        let pending = ledger.pending_proposals();
+        assert_eq!(pending.queued.iter().map(|r| r.id()).collect::<Vec<_>>(), vec![first]);
+        assert_eq!(
+            pending.identical.iter().map(|(head, r)| (*head, r.id())).collect::<Vec<_>>(),
+            vec![(first, second)]
+        );
+        // Both are still proposed: folding is attention, never state.
+        assert_eq!(
+            ledger.state_of(second),
+            Some(RecordState::Claim(ClaimState::Proposed))
+        );
+
+        // The lookup that lets a host disclose before an agent appends.
+        let twins = ledger.identical_to(
+            &Content::Claim(ClaimContent::Attribute {
+                subject,
+                name: "spec_nm".into(),
+                value: Value::Number(24.0),
+            }),
+        );
+        assert_eq!(twins.iter().map(|r| r.id()).collect::<Vec<_>>(), vec![first, second]);
+
+        // Promote the head: the twin re-emerges as its own queue entry,
+        // because the question it now poses is no longer "which copy".
+        ledger.append(promote(first)).unwrap();
+        let after = ledger.pending_proposals();
+        assert_eq!(after.queued.iter().map(|r| r.id()).collect::<Vec<_>>(), vec![second]);
+        assert!(after.identical.is_empty());
     }
 
     #[test]

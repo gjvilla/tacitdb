@@ -160,6 +160,38 @@ fn open_questions_are_citable() {
     assert!(first["text"].as_str().is_some_and(|t| !t.is_empty()));
 }
 
+/// U-12, at the tool surface: the second identical proposal is written — a
+/// witness keeps its envelope — and told what it is, and the inbox folds it
+/// rather than queueing one wording twice.
+#[test]
+fn an_identical_proposal_is_disclosed_and_folded_not_refused() {
+    let mut host = Host::start();
+    let text = "the deploy runbook lives in the operations wiki";
+    let first = host.call(
+        "tacit_propose_claim",
+        json!({"text": text, "agent": "agent-one", "source": "test"}),
+    );
+    assert!(first.get("identical_to").is_none(), "the first of anything is no duplicate");
+
+    let second = host.call(
+        "tacit_propose_claim",
+        json!({"text": text, "agent": "agent-two", "source": "test"}),
+    );
+    assert_eq!(second["identical_to"], first["record_id"]);
+    assert!(second["identical_state"].as_str().unwrap().contains("Proposed"));
+    assert_ne!(second["record_id"], first["record_id"], "both records exist");
+
+    let pending = host.call("tacit_pending_proposals", json!({"limit": 200}));
+    assert_eq!(pending["identical_and_folded"], 1);
+    let queued_texts = pending["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["text"] == text)
+        .count();
+    assert_eq!(queued_texts, 1, "one wording, one queue slot");
+}
+
 /// An agent may contribute, and what it contributes stays proposed.
 #[test]
 fn an_agent_can_propose_but_what_it_proposes_stays_proposed() {

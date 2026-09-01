@@ -55,7 +55,13 @@ meaning:
   taught a lesson on arrival: drafted expecting abstention, it was graded a
   bluff — because the record *does* settle it (D-0047 states what redaction
   does not reach), and the suite was correcting the question's author, not
-  the engine. The agreed answer is the record's, wherever it points.
+  the engine. The agreed answer is the record's, wherever it points. A day
+  later the pattern repeated with its roles swapped: G-23's abstention cited
+  U-12, U-12 resolved (D-0051), and the question was re-agreed *and reworded*
+  — its old phrasing hinged on a word the corpus deliberately still does not
+  use — while the abstain-with-citation duty moved on again, to G-24 and
+  U-24. A suite whose abstentions keep becoming answers is a register being
+  worked through, and the churn is the health.
 
 Two more arrived 2026-08-30 when D-0039's records re-sorted the corpus —
 U-37's drift, visible because it crossed verdict boundaries — and both
@@ -98,7 +104,8 @@ check that no record was written *about* it.
 | G-13 | how many concurrent writers does the store support | answer D-0015 (pending U-23) | Greg Villa | when more than one process may write one store |
 | G-14 | what colour is the logo | abstain | Greg Villa | never — this is outside the record by design |
 | G-22 | can an entity label carrying a person's name be redacted | answer D-0047 | Greg Villa | when U-46 resolves, the answer changes |
-| G-23 | how does the engine deduplicate agent proposals | abstain U-12 | Greg Villa | when U-12 resolves |
+| G-23 | what happens to a duplicate proposal from an agent | answer D-0051 | Greg Villa | if the fold or the disclosure changes |
+| G-24 | how is the event log compacted when it grows too large | abstain U-24 | Greg Villa | when U-24 resolves |
 
 ## Vocabulary baseline
 
@@ -139,4 +146,5 @@ Regenerate with `GOLDEN_BASELINE=1 cargo run -p tacit-keeper --example golden`.
 | G-13 | concurrent support writer |
 | G-14 | colour logo |
 | G-22 | — |
-| G-23 | deduplicate |
+| G-23 | — |
+| G-24 | compacted |
