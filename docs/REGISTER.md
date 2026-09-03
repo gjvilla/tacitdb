@@ -218,8 +218,10 @@ that convert surprises into registered entries while they are cheap:
   written. The patterns now live outside the tree and the script refuses to
   call an empty search clean; history was rewritten to remove them on
   D-0038's terms, with the pre-rewrite record preserved at
-  `../tacit-backup-20260903.git` (head recorded below once the mirror
-  existed). The scrub's default targets now include itself.
+  `../tacit-backup-20260903.git`, head
+  `3d5ac1e228a211bb12fc576a8c0c66f37d17076f` — the signed commit that carries
+  D-0054, fifty-one commits deep. The scrub's default targets now include
+  itself.
 
 ---
 
