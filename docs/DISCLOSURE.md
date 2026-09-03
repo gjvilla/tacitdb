@@ -40,7 +40,9 @@ The boundary was written down on the day the project started, before any code:
 It is not only an intention. `scripts/check-boundary.sh` is that rule made
 executable — it scans the documents and the source for employer names, system
 names and identifiers, and it has been run at the end of every working session
-since it was written. The design record states the same boundary in the places
+since it was written. The names it scans for are kept in a file outside the
+repository (D-0054); they were inside the script until 2026-09-03, which is the
+third fact below. The design record states the same boundary in the places
 where employer experience did inform the work: what informed it are *generic*
 lessons about what a database ought to do, stated without reference to any
 employer system, and the register records that distinction rather than assuming
@@ -54,8 +56,8 @@ last being D-0038, which closed the question this page was written to ask.
 
 ## The facts that cut the other way
 
-Two, both found by the project's own checks on 2026-08-24 and recorded rather
-than tidied:
+Three — the first two found by the project's own checks on 2026-08-24, the
+third by the same check on 2026-09-03 — all recorded rather than tidied:
 
 1. **Every commit was authored, committed and cryptographically signed under my
    employer email address.** The repository's own record therefore attributed all
@@ -72,7 +74,19 @@ than tidied:
    timestamps were never altered. What it means depends on facts about my working
    arrangements that are not in this repository.
 
-While the question was open, neither was altered: rewriting the authorship
+3. **The boundary script itself carried the employer's name, its mail domain
+   and its system names** — as the patterns it greps for, tracked from the day
+   it was written until 2026-09-03. It scanned the documents and the source and
+   never itself, so the one file that named what must not be in the tree was
+   the one file the scan skipped. Found the first time the scrub was run over
+   every tracked file, ahead of making the repository public; nothing else was
+   in the tree. The patterns moved to a file outside the repository and history
+   was rewritten to replace them with placeholders, on D-0038's terms — the
+   reason recorded first (D-0054), the pre-rewrite record preserved in a mirror
+   clone. This is a fact about the gate, not about what it guards: no employer
+   code, data or configuration was ever here, only the list of names.
+
+While the question was open, neither of the first two was altered: rewriting the authorship
 record of a project whose ownership is an open question would have been tidying
 evidence, whatever else it would be (D-0035).
 
@@ -97,6 +111,7 @@ with U-6's counsel item.
 
 ---
 
-*Recorded 2026-08-24; resolved 2026-08-29 (D-0038). Tracked as U-7 in
-[REGISTER.md](REGISTER.md). Public release now blocked only by U-6 (name) and
-U-17 (licence).*
+*Recorded 2026-08-24; resolved 2026-08-29 (D-0038); amended 2026-09-03
+(D-0054). Tracked as U-7 in [REGISTER.md](REGISTER.md). The licence is settled
+(D-0050); the source no longer waits on anything to be public, and publishing
+the crates under the name still waits on U-6.*

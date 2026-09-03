@@ -212,7 +212,14 @@ that convert surprises into registered entries while they are cheap:
   references that leak context, and confirm U-6 and U-7 are resolved. The script matches one
   name case-sensitively because it collides with an ordinary English word.
   That nuance exists because the naive rule cried wolf four times in a single
-  day, and an alarm nobody reads is worse than no alarm at all.
+  day, and an alarm nobody reads is worse than no alarm at all. **Amended
+  2026-09-03 (D-0054):** the first run over *every* tracked file found the
+  names inside the script itself, where they had been since the day it was
+  written. The patterns now live outside the tree and the script refuses to
+  call an empty search clean; history was rewritten to remove them on
+  D-0038's terms, with the pre-rewrite record preserved at
+  `../tacit-backup-20260903.git` (head recorded below once the mirror
+  existed). The scrub's default targets now include itself.
 
 ---
 

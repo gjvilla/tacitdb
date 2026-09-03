@@ -2551,6 +2551,59 @@ agreed in the row, and only the build was waiting.
 
 ---
 
+## D-0054 · The scrub carried the names it scans for, and the tree is corrected
+
+```yaml
+id: D-0054
+state: promoted
+author: Greg Villa
+recorded: 2026-09-03
+valid_from: 2026-09-03
+source: the pre-publication scrub, run over every tracked file for the first
+  time on the day the repository was to go public
+evidence: [scripts/check-boundary.sh, docs/DISCLOSURE.md]
+review_trigger: before any further rewrite of history, re-read the argument
+  that made this one permissible; and when anyone other than the owner first
+  runs the scrub, because the terms file is per-machine and that is the limit
+  named below
+```
+
+**Assertion.** `scripts/check-boundary.sh` hard-coded the employer's name, its
+mail domain and the names of its internal systems as the patterns it greps
+for — the identifiers D-0010 forbids, written into the one file whose job was
+to keep them out, and tracked since 2026-08-24. The scrub never saw it because
+it scanned `docs/` and `crates/` and not itself. Found on 2026-09-03 by running
+it over every tracked file before making the repository public; every other
+file was clean. The patterns now live outside the tree
+(`~/.config/tacit/boundary-terms`, or wherever `TACIT_BOUNDARY_TERMS` points),
+one extended regex per line with a class prefix, and the script refuses to
+report "clean" when that file is missing or holds nothing — a scrub with
+nothing to look for is not a scrub. Its default targets now include
+`scripts/`, the README and the manifest, so the gate reads itself.
+
+**Why the rewrite is permissible, and what it changes.** D-0038 set the terms:
+history is rewritten only when the reason is recorded first, in a commit made
+before the rewrite, and the pre-rewrite record is preserved in full. Both hold.
+This record is committed and signed ahead of the rewrite; a mirror clone is
+taken after that commit (`../tacit-backup-20260903.git` — its head is named in
+the register row this record amends, written after the mirror existed); and
+the rewrite replaces the identifiers in every historical blob with neutral
+placeholders and nothing else. Commit hashes change; the signatures on every
+commit are dropped by the rewrite, as D-0038's were; timestamps and messages
+are untouched — the messages were checked and carry none of the names. The
+older mirror from D-0038 stays where it is.
+
+**What this does not fix, said plainly.** The terms file is per-machine. A
+second contributor cannot run the scrub until they have one, and the file
+cannot be shipped without shipping the names — so the gate is the owner's,
+not the project's, until someone needs it to be otherwise. And the finding is
+a fact about the gate, not the boundary: nothing employer-owned was ever in
+the tree except the list of things that must not be. DISCLOSURE.md records it
+beside the two facts that already cut the other way, for the same reason they
+are there.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
