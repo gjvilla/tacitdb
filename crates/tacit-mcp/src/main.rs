@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use store::Store;
 use tacit_core::Ledger;
 use std::collections::BTreeSet;
-use tacit_keeper::{Attest, Disposition};
+use tacit_keeper::{Attest, Disposition, StoreLock};
 
 /// What `--help` prints. Written to stdout, the one time that channel is not
 /// MCP: nobody is on the other end of a process that exits before it serves,
@@ -31,7 +31,8 @@ Arguments:
 
 Options:
   --store <PATH>         Keep the ledger on disk at PATH, with its audit log beside
-                         it as PATH.audit. Without it the ledger dies at exit.
+                         it as PATH.audit and its lock as PATH.lock. Without it the
+                         ledger dies at exit.
   --require-signature    Decline to transcribe a promotion whose words no signed
                          commit carries; the claim stays proposed. The default
                          records what git can establish and says so in the verdict.
@@ -40,8 +41,9 @@ Options:
   -h, --help             Print this and exit.
 
 The tool surface has no promote tool. What an agent proposes waits for a person,
-who promotes by writing the decision into docs/DECISIONS.md. See the README's
-\"Your own corpus\" section for the document format.
+who rules on it with `tacit-keeper promote|reject|retire` against the same
+--store (stop this host first; it holds the lock), or writes a decision into
+docs/DECISIONS.md. See the README's \"Your own corpus\" section.
 ";
 
 #[tokio::main]
@@ -97,6 +99,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // With a store, the ledger outlives the process and what agents propose
     // is still waiting for a person next time. Without one it is a scratch
     // ledger that dies at exit — useful for a look around, useless as memory.
+    // One process holds a store at a time (D-0015, made so by D-0055): the
+    // lock is taken before the open and held until exit, so a verdict rendered
+    // at the keyboard cannot land underneath this process, and this process
+    // cannot start underneath one being rendered.
+    let _lock = match &store {
+        Some(path) => match StoreLock::acquire(path, "tacit-mcp") {
+            Ok(lock) => {
+                if let Some(from) = &lock.took_over_from {
+                    eprintln!("tacit-mcp: took over the lock from {from}");
+                }
+                Some(lock)
+            }
+            Err(error) => {
+                eprintln!("tacit-mcp: {error}");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+
     let mut ledger = match &store {
         Some(path) => match Ledger::open(path) {
             Ok(opened) => {

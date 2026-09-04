@@ -9,11 +9,13 @@ pub mod corpus;
 #[cfg(feature = "real-embedder")]
 pub mod embed;
 pub mod golden;
+pub mod lock;
 pub mod origin;
 pub mod parse;
 pub mod pep;
 pub mod register;
 pub mod synthetic;
+pub mod verdict;
 
 pub use corpus::{
     Attest, Attestations, DECISION_KIND, DECISIONS_DOC, Disposition, IngestError,
@@ -22,6 +24,8 @@ pub use corpus::{
 };
 pub use attest::{Attestation, Blame, Recheck, TrustReview, Verified, review_trust};
 pub use origin::Origin;
+pub use lock::{LockError, StoreLock, lock_path};
+pub use verdict::{Ruling, render, retire_reason};
 pub use golden::{
     Expectation, GoldenQuestion, Graded, Scorecard, Verdict, absent_vocabulary, missing_baseline, parse_baseline, parse_golden, quoted_questions,
     stale_triggers, vocabulary_drift,

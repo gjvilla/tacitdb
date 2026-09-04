@@ -26,7 +26,8 @@ Two layers, deliberately ([D-0002](docs/DECISIONS.md)):
   chain integrity.
 - **`tacit-keeper`** — the discipline: corpus parsers, the register and
   golden-suite machinery, attestation (which promotions rest on signed
-  commits), and the measurement instruments.
+  commits), the measurement instruments, and the one binary that renders a
+  person's verdict on a store.
 - **`tacit-mcp`** — the only served surface: a small stdio host exposing ten
   typed, audited tools. The ratchet is visible as an absence — there is no
   promote tool, so no sequence of agent calls turns a proposal into
@@ -53,6 +54,7 @@ cargo run -p tacit-keeper --example golden      # the self-corpus suite, graded
 scripts/fetch-proposals.sh                      # fetch the pinned outside corpus
 cargo run -p tacit-keeper --example pep_golden  # the outside-corpus suite, graded
 cargo run -p tacit-mcp -- --store target/tacit.log .   # serve this repo's corpus over MCP, durably
+cargo run -p tacit-keeper -- pending --store target/tacit.log   # what agents proposed; promote|reject|retire rule on it
 ```
 
 The measurement instruments (`explain`, `calibration`, `fusion_sweep`,
@@ -163,8 +165,19 @@ lines against `tacit-core`, but you would be writing it. An ingest that fails
 partway has already written what preceded the failure — reruns are
 idempotent, so fix the document and start again rather than deleting the
 store. And a person promotes an agent's proposal by writing the decision into
-`docs/DECISIONS.md`, not by touching the store. There is no verdict command
-yet.
+`docs/DECISIONS.md`, or rules on it directly:
+
+```bash
+cargo run -p tacit-keeper -- pending --store /path/to/acme.log
+cargo run -p tacit-keeper -- promote --store /path/to/acme.log \
+  --as "Jordan Lee" --why "measured twice, budget was agreed in D-0001" rec_01M1P58RMFAD6DC86Q3D6JV6H2
+```
+
+`reject` and `retire --reason <superseded|no-longer-true|promoted-in-error>`
+take the same shape. The name is recorded as asserted, not verified, and the
+verdict says so. The store is locked while either the host or the command
+holds it, so stop the host first; the verdict is in the log when it next
+starts.
 
 ## Status, stated plainly
 

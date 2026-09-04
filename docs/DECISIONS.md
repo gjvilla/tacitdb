@@ -2604,6 +2604,79 @@ are there.
 
 ---
 
+## D-0055 · The person's half of the ratchet gets a command, and the store gets a lock
+
+```yaml
+id: D-0055
+state: promoted
+author: Greg Villa
+recorded: 2026-09-04
+valid_from: 2026-09-04
+source: the first cold read of the public repository, which found an agent's
+  proposal with nowhere to go
+evidence: [REQUIREMENTS.md R-8, REQUIREMENTS.md R-11]
+review_trigger: when a keyboard verdict needs to carry a signature rather than
+  an asserted name; or when a second machine, or a second user on one machine,
+  needs to hold a store
+```
+
+**Assertion.** `tacit-keeper` is a binary in the keeper crate with four
+commands over a `--store`: `pending` lists the inbox; `promote`, `reject` and
+`retire` each append one verdict under a typed name and a required rationale.
+The actions are the ledger's own — no new grammar, no bypass — and an illegal
+one is refused by the same check that refuses a transcribed verdict, with the
+ledger's reason printed. The tool surface is unchanged: an agent still cannot
+promote, and the integration test that says so still passes. What the command
+records about identity is the honest minimum. The name is asserted at the
+keyboard and the verdict's author detail says exactly that, in the
+attestation vocabulary D-0025 established, so `review_trust` files a keyboard
+promotion under nothing-to-recheck rather than losing it, and "which
+promotions rest on a name someone typed" is a question the record answers.
+
+**The lock.** D-0015 stated that one process owns a store at a time and
+called it file-lock semantics; nothing implemented it, because nothing needed
+to — only the host ever opened a store. A second process that appends to the
+same log is the event D-0022 named as its review trigger, and the re-read
+concluded what the trigger implied: the host holds the ledger in memory and
+appends at the file's end, so a verdict appended underneath it would carry a
+later record-time than the host's next append, and the log would stop
+replaying. The answer is not to make record-time comparable across processes
+but to keep two processes out of one log. A sidecar file beside the store,
+created exclusively, holding the holder's pid and name, removed on drop; both
+the host and the command take it before they open, and the refusal names who
+has it. A dead holder's file is believed only while its pid answers, then
+taken over and said so. The measurement examples that accept `--store` do not
+take it; they are run against stores nobody serves, and that is stated rather
+than enforced.
+
+**Why the ingest path was not enough.** Transcription is right for decisions:
+the document is upstream, the words have a git history, and the verdict
+carries what git can establish. An agent's proposal has no document. Writing
+a decision *about* it creates a new promoted claim and leaves the proposal
+pending forever — the inbox filled and nothing could empty it, which is R-8's
+lifecycle with one transition missing. The first stranger to read the
+repository found this in an afternoon, and it was the difference between a
+project that demonstrates the ratchet and one a team could run.
+
+**Alternatives rejected.** A promote tool behind a flag on the MCP host (the
+absence of one is the surface's most legible property, and a flag is an
+agent's `--yes`); requiring a signed commit for a keyboard verdict (there is
+no commit — the verdict is the act, and an ad hoc signing scheme would be a
+second attestation vocabulary; the review trigger names the day this is
+wanted); a set verdict from the command line (enumerating ids by hand is how
+the wrong one gets in; D-0034's editorial act stays with the ingest); an
+advisory lock through a crate (a dependency in the engine's neighbour for a
+sidecar file the standard library writes).
+
+**Stated limits.** Liveness is asked with `kill -0`, which also fails for a
+live process owned by another user, so on a shared machine a holder running
+as someone else reads as gone; single-tenant is the v1 regime. The name on a
+keyboard verdict is whatever was typed. Both are in the record beside the
+mechanism, and the review trigger names the two events that would change
+either.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

@@ -338,3 +338,51 @@ fn an_unknown_option_points_at_help() {
     let text = String::from_utf8(output.stderr).expect("utf8");
     assert!(text.contains("--help"), "stderr was: {text}");
 }
+
+/// With a store, the host holds the store's lock for as long as it runs and
+/// releases it on exit — so a keyboard verdict cannot land underneath it
+/// (D-0055). Checked against the real binary because a lock the host forgot
+/// to take would fail silently in exactly the case it exists for.
+#[test]
+fn a_served_store_is_held_and_released() {
+    let dir = std::env::temp_dir().join(format!("tacit-host-lock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = dir.join("store.log");
+    let lock = dir.join("store.lock");
+
+    let repo = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tacit-mcp"))
+        .arg("--store")
+        .arg(&store)
+        .arg(repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("host starts");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    // Once it answers initialize, it has opened the store — and taken the lock.
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},
+            "clientInfo":{"name":"lock-test","version":"1"}}})
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert!(line.contains("\"result\""), "initialize answered: {line}");
+
+    let held = std::fs::read_to_string(&lock).expect("lock file exists while serving");
+    assert!(held.contains("tacit-mcp"), "lock names its holder: {held:?}");
+    assert_eq!(held.split_whitespace().next().unwrap(), child.id().to_string());
+
+    drop(stdin);
+    child.wait().expect("host exits when stdin closes");
+    assert!(!lock.exists(), "lock released on exit");
+}

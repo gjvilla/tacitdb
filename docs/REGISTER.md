@@ -62,6 +62,14 @@ What the project has decided and recorded, with owners and review triggers:
   that is not exactly the pinned slice. First grading 16/24; every shortfall
   filed by measurement (`explain --proposals`), two new unknowns registered
   (U-40, U-41), and one ingest fault found by a question designed to catch it.
+- **A person can rule from the keyboard, and a store has one holder**
+  (2026-09-04, D-0055). `tacit-keeper pending|promote|reject|retire --store
+  <path>` renders one verdict at a time under a typed name and a required
+  rationale, through the ledger's own grammar; the name is recorded as
+  asserted, in the attestation vocabulary, so the trust review counts it
+  rather than losing it. Both the host and the command take a sidecar lock
+  before opening the store — the answer to D-0022's fired trigger is that two
+  processes never write one log.
 - **Trust is asked twice** (2026-08-24, D-0027). What the verdict recorded stays
   as it was; `review_trust` re-asks the repository on demand, and the host raises
   the alarm on the way up. A weakening changes nothing in the record — retiring
