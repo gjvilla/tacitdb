@@ -11,6 +11,10 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+# Edition 2024 needs 1.85; the dependency graph (darling, via rmcp's macros)
+# needs 1.88. Stated so an old toolchain fails on this line and not on an
+# edition error three crates deep.
+rust-version = "1.88"
 # Licensed (D-0050) and still unpublished: pushing crates to a registry under
 # the tacitdb name waits on U-6's counsel review, which is a different
 # question from whether the source is free. It is.

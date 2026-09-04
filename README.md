@@ -52,7 +52,7 @@ cargo run -p tacit-keeper --example dogfood     # the corpus interrogating itsel
 cargo run -p tacit-keeper --example golden      # the self-corpus suite, graded
 scripts/fetch-proposals.sh                      # fetch the pinned outside corpus
 cargo run -p tacit-keeper --example pep_golden  # the outside-corpus suite, graded
-cargo run -p tacit-mcp -- .                     # serve this repo's corpus over MCP
+cargo run -p tacit-mcp -- --store target/tacit.log .   # serve this repo's corpus over MCP, durably
 ```
 
 The measurement instruments (`explain`, `calibration`, `fusion_sweep`,
@@ -130,11 +130,32 @@ Then serve it, durably:
 cargo run -p tacit-mcp -- --store acme.log /path/to/acme
 ```
 
-Point any MCP client at that command and it gets `tacit_search` with
-citations and calibrated abstention, `tacit_open_questions`,
-`tacit_propose_claim`, the pending inbox, and an audit log beside the store.
-Every start is a sync, so edit the documents and restart: unchanged records
-write nothing, edited ones supersede what they replace.
+Any MCP client that speaks stdio can attach to it. Build the binary once,
+then register the command. With Claude Code:
+
+```bash
+cargo build --release -p tacit-mcp
+claude mcp add tacit -- "$PWD/target/release/tacit-mcp" --store /path/to/acme.log /path/to/acme
+```
+
+With Claude Desktop, or any client that reads the standard JSON form:
+
+```json
+{
+  "mcpServers": {
+    "tacit": {
+      "command": "/absolute/path/to/target/release/tacit-mcp",
+      "args": ["--store", "/path/to/acme.log", "/path/to/acme"]
+    }
+  }
+}
+```
+
+The client then gets `tacit_search` with citations and calibrated
+abstention, `tacit_open_questions`, `tacit_propose_claim`, the pending
+inbox, and an audit log beside the store. Every start is a sync, so edit the
+documents and restart: unchanged records write nothing, edited ones
+supersede what they replace. `tacit-mcp --help` lists the options.
 
 Three things worth knowing before you rely on it. This is the only ingest
 format today; the proposals suite shows a second parser is a few hundred
@@ -147,7 +168,10 @@ yet.
 
 ## Status, stated plainly
 
-Working v1, pre-release, single author. **Dual-licensed MIT OR Apache-2.0**
+Working v1, pre-release, single author. Rust 1.88 or later. The `tacit-python`
+crate is a placeholder — a re-export of `tacit-core` with no PyO3 and no
+bindings yet — so "Python bindings" in the decision record is a plan, not a
+thing you can install. **Dual-licensed MIT OR Apache-2.0**
 ([D-0050](docs/DECISIONS.md)) — use it under either, at your option. The
 crates stay `publish = false` until the name's counsel review completes
 ([U-6](docs/REGISTER.md)); the registrable name is settled

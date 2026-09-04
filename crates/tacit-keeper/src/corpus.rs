@@ -98,7 +98,11 @@ pub enum IngestError {
     #[error("record {record}: bad date {value:?} for key {key}")]
     BadDate { record: String, key: String, value: String },
 
-    #[error("record {record}: unsupported corpus state {state:?}")]
+    #[error(
+        "record {record}: unsupported corpus state {state:?} — a document holds only `promoted` (a \
+         decision) or `registered` (a hypothesis); proposals are made through the tool surface and \
+         wait there"
+    )]
     UnsupportedState { record: String, state: String },
 
     #[error("record {record}: id says hypothesis but sections say claim (or vice versa)")]
@@ -107,7 +111,10 @@ pub enum IngestError {
     #[error("record {record}: score_by is only meaningful on a hypothesis")]
     StrayScoreBy { record: String },
 
-    #[error("the register does not state an owner, so its gaps have no author")]
+    #[error(
+        "the register does not state an owner, so its gaps have no author — add a line `Owner: \
+         Name` to docs/REGISTER.md"
+    )]
     MissingRegisterOwner,
 }
 
