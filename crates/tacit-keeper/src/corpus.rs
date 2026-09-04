@@ -443,6 +443,32 @@ pub fn ingest_text_with(
     repo_root: &Path,
     attest: &Attestations,
 ) -> Result<IngestReport, IngestError> {
+    // A durable ledger is rehearsed before it is written (D-0057). The
+    // parsers run first, but a record's state, its dates, its evidence and
+    // its hypothesis signals are judged inside the append phases, so a fault
+    // in the fortieth record used to land after thirty-nine were on disk —
+    // the store then held a corpus its author had been told was refused.
+    // The rehearsal ingests the same texts into a scratch ledger with the
+    // same attestation; only if every record passes does the real pass
+    // begin. What the rehearsal cannot see is the store's own history — a
+    // disposition that exists only against prior records — and those paths
+    // report rather than fail by design (U-19), so a failure that survives
+    // the rehearsal is a bug in the sync, not a fault in the document.
+    // In-memory ledgers are not rehearsed: a failed pass leaves nothing
+    // anyone will open again.
+    if ledger.journal_path().is_some() {
+        ingest_pass(&mut Ledger::new(), text, register_text, repo_root, attest)?;
+    }
+    ingest_pass(ledger, text, register_text, repo_root, attest)
+}
+
+fn ingest_pass(
+    ledger: &mut Ledger,
+    text: &str,
+    register_text: Option<&str>,
+    repo_root: &Path,
+    attest: &Attestations,
+) -> Result<IngestReport, IngestError> {
     let parsed = parse_corpus(text)?;
     let unknowns = match register_text {
         Some(register) => parse_register(register)?,
@@ -1689,6 +1715,42 @@ mod tests {
             ingest_text(&mut clean, &decisions_doc(&[("D-0001", "Four forces.")]), None, &root)
                 .expect("ingest");
         assert!(!ordinary.unreadable_provenance);
+    }
+
+    /// D-0057: a document fault is found before the first durable write. The
+    /// state check lives in the third phase, after entities and claims are
+    /// appended, which is exactly the fault that used to leave a partial
+    /// store behind a refusal.
+    #[test]
+    fn a_refused_document_writes_nothing_durable() {
+        let root = repo_root();
+        let path = std::env::temp_dir().join(format!("tacit-atomic-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let good = decisions_doc(&[("D-0001", "First."), ("D-0002", "Second.")]);
+        assert!(good.contains("state: promoted"), "the fixture writes promoted records");
+        // The second record carries the fault, so a pass that appends as it
+        // goes would have written D-0001 before refusing.
+        let bad = good.replace("id: D-0002\nstate: promoted", "id: D-0002\nstate: proposed");
+        assert_ne!(good, bad, "the fault was planted");
+
+        {
+            let mut ledger = Ledger::open(&path).expect("open").ledger;
+            let err = ingest_text(&mut ledger, &bad, None, &root).expect_err("refused");
+            assert!(matches!(err, IngestError::UnsupportedState { .. }), "{err}");
+            assert!(ledger.log().is_empty(), "nothing appended in memory either");
+        }
+        let reopened = Ledger::open(&path).expect("reopen");
+        assert_eq!(reopened.recovery.events_replayed, 0, "nothing reached the disk");
+
+        // The same document, corrected, then ingests in full — the rehearsal
+        // is a gate, not a tax on the corpus.
+        let mut ledger = reopened.ledger;
+        let report = ingest_text(&mut ledger, &good, None, &root).expect("ingests");
+        assert_eq!(ledger.log().len(), report.appended());
+        assert!(report.appended() > 0);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// The case U-19 was actually about: the store outlives the process, so the

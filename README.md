@@ -163,10 +163,10 @@ supersede what they replace. `tacit-mcp --help` lists the options.
 
 Three things worth knowing before you rely on it. This is the only ingest
 format today; the proposals suite shows a second parser is a few hundred
-lines against `tacit-core`, but you would be writing it. An ingest that fails
-partway has already written what preceded the failure — reruns are
-idempotent, so fix the document and start again rather than deleting the
-store. And a person promotes an agent's proposal by writing the decision into
+lines against `tacit-core`, but you would be writing it. An ingest that the
+documents cause to fail writes nothing: a durable store is rehearsed in
+memory first, so fix the document and start again. And a person promotes an
+agent's proposal by writing the decision into
 `docs/DECISIONS.md`, or rules on it directly:
 
 ```bash

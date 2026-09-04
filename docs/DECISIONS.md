@@ -2731,6 +2731,62 @@ client has no expected record).
 
 ---
 
+## D-0057 · A durable store is rehearsed before it is written
+
+```yaml
+id: D-0057
+state: promoted
+author: Greg Villa
+recorded: 2026-09-04
+valid_from: 2026-09-04
+source: the first cold read of the public repository, whose first refused
+  ingest left fifteen events in the store it had refused
+evidence: [REQUIREMENTS.md R-9, docs/REGISTER.md]
+review_trigger: when a fault survives the rehearsal and fails the real pass
+  — that is a sync bug to file, and if it recurs the rehearsal needs the
+  store's history; or when a corpus is large enough that ingesting it twice
+  in memory is a cost anyone can measure
+```
+
+**Assertion.** When the ledger is durable, `ingest_text_with` first ingests
+the same documents, with the same attestation, into a scratch ledger in
+memory, and begins the real pass only if every record passes. A document
+fault — an unaccepted state, a bad date, evidence that resolves to no file, a
+hypothesis whose sections say claim, a register without an owner — is now
+found before the first byte reaches the log. In-memory ledgers are not
+rehearsed: a failed pass there leaves nothing anyone opens again.
+
+**Forces.** The parsers ran first and always had, which is why this looked
+solved from inside. But a record's state, its dates and its evidence are
+judged inside the append phases, record by record, and the phases append as
+they go — so a fault in the third record landed after the first two, their
+titles, their mention edges and the register's gaps were on disk. The store
+then held a corpus its author had just been told was refused. Reruns were
+idempotent, so nothing duplicated, and the README said so — a caveat where a
+guarantee belonged. R-9 asks for restarts that are boring, and a refusal that
+leaves state behind is the opposite: the next run's "replayed fifteen
+events" is a question with no good answer.
+
+**Why a rehearsal and not a transaction.** The engine has no transaction and
+this record does not give it one. An append is fsynced before the in-memory
+commit (D-0019) and that discipline is worth more than atomicity across a
+batch; staging the batch in the engine would mean either a second commit
+path or records that exist in memory and not on disk, each of which is the
+bypass D-0019 exists to prevent. The keeper already owns judgment about
+documents; judging the whole document before writing any of it is the same
+job done in the right order. The cost is one extra in-memory ingest, which
+is microseconds per record (U-25's measurement), against a durable pass that
+is milliseconds per record.
+
+**Stated limit.** The rehearsal sees the document and not the store's
+history. A disposition that exists only against prior records — an edited
+record superseding its predecessor, a resolution the store has since
+retired — runs paths the rehearsal never took; those paths report rather
+than fail by design (U-19, D-0021), so a failure that survives the rehearsal
+is a bug in the sync and the review trigger says what to do about it.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

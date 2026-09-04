@@ -62,6 +62,11 @@ What the project has decided and recorded, with owners and review triggers:
   that is not exactly the pinned slice. First grading 16/24; every shortfall
   filed by measurement (`explain --proposals`), two new unknowns registered
   (U-40, U-41), and one ingest fault found by a question designed to catch it.
+- **A refused document writes nothing** (2026-09-04, D-0057). A durable
+  ledger is rehearsed in memory before the real pass, so every fault a
+  document can carry is found before the first byte reaches the log. The
+  rehearsal does not see the store's history; a failure that survives it is
+  a sync bug, and the record's trigger says so.
 - **An abstention says why** (2026-09-04, D-0056). `tacit_search` carries a
   `why`: the first item's coverage and how much of the question the record
   can speak to, each beside its bar, the conditions that fell short by name,
