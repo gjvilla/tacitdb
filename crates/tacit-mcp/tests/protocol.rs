@@ -207,6 +207,42 @@ fn words_the_record_never_used_are_named() {
     assert!(out["why"]["summary"].as_str().unwrap().contains("never written here"), "{:?}", out["why"]);
 }
 
+/// D-0058 over the wire: the served list carries neither a similarity-only
+/// item that covers none of the question nor a record's title beside its
+/// body.
+#[test]
+fn the_served_list_carries_neither_kind_of_noise() {
+    let mut host = Host::start();
+    for query in [
+        "why is the runtime embedded rather than a server",
+        "what is the atomic unit of memory",
+        "zeppelin marmalade runtime",
+    ] {
+        let out = host.call("tacit_search", json!({"query": query, "limit": 20}));
+        let items = out["items"].as_array().unwrap();
+        for item in items {
+            let via = item["via"].as_str().unwrap();
+            let coverage = item["coverage"].as_f64().unwrap();
+            assert!(!(via == "vector" && coverage == 0.0), "uncovered similarity-only item: {item}");
+        }
+        // A title is served only when nothing else about its record is.
+        for (n, item) in items.iter().enumerate() {
+            let text = item["text"].as_str().unwrap_or("");
+            if !text.starts_with("title ") {
+                continue;
+            }
+            let about = item["about"].as_array().cloned().unwrap_or_default();
+            let sibling = items.iter().enumerate().any(|(m, other)| {
+                m != n
+                    && other["about"]
+                        .as_array()
+                        .is_some_and(|others| others.iter().any(|a| about.contains(a)))
+            });
+            assert!(!sibling, "title listed beside its body on {query:?}: {text}");
+        }
+    }
+}
+
 #[test]
 fn open_questions_are_citable() {
     let mut host = Host::start();

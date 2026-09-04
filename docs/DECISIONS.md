@@ -2787,6 +2787,76 @@ is a bug in the sync and the review trigger says what to do about it.
 
 ---
 
+## D-0058 · Two kinds of noise leave the list, measured first
+
+```yaml
+id: D-0058
+state: promoted
+author: Greg Villa
+recorded: 2026-09-04
+valid_from: 2026-09-04
+source: the first cold read of the public repository, which called two things
+  in every search result noise, and the sweep that agreed
+evidence: [REQUIREMENTS.md R-10, docs/GOLDEN.md, docs/PEP-GOLDEN.md]
+review_trigger: when `noise_sweep` shows either setting moving a question on
+  either suite; or when a corpus arrives whose title attribute is not the
+  record's own shorter half
+```
+
+**Assertion.** Two query settings, both defaulted on, both swept on both
+suites before they were. `drop_uncovered` removes, from a list in which some
+item covers part of the question, the items reached by similarity alone that
+cover none of it — beside a covered item such an item cannot be evidence
+under D-0020, and fusion can seat one first, so that the outcome is read from
+a record sharing no word with the question. When nothing covers the question
+they stay: they are the reach D-0020 bought, reported as weak, as two tests
+older than this record insist. `titles: PreferBody` treats a record's title claim as the shorter half of the
+same record: listed after its body it is dropped, listed before it it hands
+its slot to the body, and with no body in the list it stays. Both are fields
+on `Query`, so the old list is one setting away and the measurement can be
+re-run. Nothing is re-scored; a body that takes a title's slot brings its
+own coverage and relevance.
+
+**The measurement.** `cargo run --release -p tacit-keeper --example
+noise_sweep` grades six settings over both corpora and counts the noise each
+removes from the lists it graded. On the self-hosting suite, twenty-four
+questions assembled 240 items, of which 34 were similarity-only with zero
+coverage and 19 were titles listed beside an item about the same record. On
+the proposals suite, 214 items, 10 uncovered, no duplicate titles. Under
+every setting, on both suites, the pass count stayed at 20 of 24 and no
+question's verdict moved. The setting adopted here leaves 0 duplicate titles
+on each and 0 uncovered items on the proposals suite; on the self-hosting
+suite 10 uncovered items remain, all of them in lists where nothing covers
+the question — the reach, kept on purpose. Folding titles only behind their
+bodies left 6 and 8 duplicates, because a title that outranks its body
+arrives first. The first draft of the rule dropped every uncovered item and
+two tests older than it failed; the narrowing is theirs. And this record's
+own first wording turned G-07 underconfident — the vector ranker seated
+it first with a fifth of the coverage, on two incidental words — which is
+U-37 happening to the record that was being written about drift; the two
+words went, and the suite came back.
+
+**Why this is not D-0043's refusal.** That record refused to read confidence
+from the best-covering item because the best-covering item of an
+unanswerable question is the longest one. Handing a title's slot to its body
+is not a search for the best: the slot was earned by the title's rank, the
+body is the same record's fuller text, and the swap was graded for exactly
+the flip D-0043 feared and produced none across forty-eight questions. The
+review trigger is that flip, and it reopens this.
+
+**Alternatives rejected.** Merging title text into the body's indexed text
+(changes every ranking on both corpora for a display problem, and the title
+as its own document is what lets a query of the title alone find the
+record); folding by shared subject rather than by title role (hides distinct
+claims about one entity, which is the graph's whole use); dropping every
+zero-coverage item regardless of how it was reached (expanded context is
+zero-coverage by construction and is asked for explicitly); dropping
+similarity-only items even when they are all the list has (that is the
+spelling-and-suffix reach of D-0020, and the tests that hold it down are the
+reason the rule reads as it does).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

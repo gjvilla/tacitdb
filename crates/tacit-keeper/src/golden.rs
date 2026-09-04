@@ -484,6 +484,22 @@ pub fn run_fused(
     questions: &[GoldenQuestion],
     fusion: &tacit_core::Fusion,
 ) -> Scorecard {
+    run_configured(ledger, projection, index, vectors, questions, &|query| {
+        query.fusion = fusion.clone();
+    })
+}
+
+/// Grade under any query configuration. Every knob a sweep wants to turn is
+/// a field on [`Query`], so the instrument is one closure rather than one
+/// runner per knob.
+pub fn run_configured(
+    ledger: &Ledger,
+    projection: &Projection,
+    index: &TextIndex,
+    vectors: Option<(&VectorIndex, &dyn Embedder)>,
+    questions: &[GoldenQuestion],
+    configure: &dyn Fn(&mut Query),
+) -> Scorecard {
     let retriever = index.retriever(ledger, projection, ViewSpec::now());
     let retriever = match vectors {
         Some((index, embedder)) => retriever.with_vectors(index, embedder),
@@ -493,7 +509,7 @@ pub fn run_fused(
         .iter()
         .map(|question| {
             let mut query = Query::text(&question.question);
-            query.fusion = fusion.clone();
+            configure(&mut query);
             let found = retriever.retrieve(&query);
             grade(ledger, question, &found)
         })

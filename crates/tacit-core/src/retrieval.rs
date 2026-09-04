@@ -387,6 +387,35 @@ pub struct Query {
     /// offering as a possibly-relevant open question. Deliberately *not* used
     /// to confer confidence on an answer — see the note in `retrieve`.
     pub min_similarity: f32,
+    /// When at least one item covers some of the question, drop the items
+    /// reached by similarity alone that cover none of it. Beside a covered
+    /// item such an item can never be evidence — D-0020 lets similarity raise
+    /// a question and never assert an answer — and when fusion seats one
+    /// first, the outcome is read from a record that shares no word with the
+    /// question. When *nothing* covers the question, the similarity-only
+    /// items stay: they are the reach D-0020 bought, and they are reported as
+    /// weak, as they always were. Swept on both suites before it was
+    /// defaulted (D-0058).
+    pub drop_uncovered: bool,
+    /// What to do when a record's title claim and its body claim both arrive
+    /// as items: the ingest writes both (D-0034), they anchor to the same
+    /// source, and a reader shown "title X" beside X has been shown one thing
+    /// twice. Swept on both suites before it was defaulted (D-0058).
+    pub titles: TitleFold,
+}
+
+/// How assembly treats a title claim whose body is also in the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleFold {
+    /// Both stay, wherever fusion put them.
+    Keep,
+    /// A title arriving after an item about the same subject is dropped; a
+    /// title arriving first stays, and its body still follows.
+    FoldBehind,
+    /// As `FoldBehind`, and a title arriving first gives its slot to its body
+    /// when the body is anywhere in the list — the body's own coverage and
+    /// relevance travel with it, so nothing is judged twice.
+    PreferBody,
 }
 
 impl Query {
@@ -404,6 +433,8 @@ impl Query {
             stopwords: DEFAULT_STOPWORDS.iter().map(|s| s.to_string()).collect(),
             gap_budget: 3,
             min_similarity: 0.5,
+            drop_uncovered: true,
+            titles: TitleFold::PreferBody,
         }
     }
 
@@ -876,6 +907,15 @@ impl<'a> Retriever<'a> {
                 })
             })
             .collect();
+
+        if query.drop_uncovered && items.iter().any(|item| item.coverage > 0.0) {
+            items.retain(|item| !(matches!(item.via, Via::Vector) && item.coverage <= 0.0));
+        }
+        items = match query.titles {
+            TitleFold::Keep => items,
+            TitleFold::FoldBehind => fold_titles(items, false),
+            TitleFold::PreferBody => fold_titles(items, true),
+        };
 
         if let Some(expansion) = &query.expand {
             let seeds: Vec<RecordId> = items.iter().map(|i| i.record.id()).collect();
@@ -1378,6 +1418,63 @@ impl<'a> Retriever<'a> {
     }
 }
 
+/// The subject of a title claim — the ingest's `title` attribute on the
+/// record's own entity (corpus and proposals alike) — or `None` for anything
+/// that is not one.
+fn title_subject(record: &Record) -> Option<EntityId> {
+    match record.content() {
+        Content::Claim(ClaimContent::Attribute { subject, name, .. }) if name == "title" => {
+            Some(*subject)
+        }
+        _ => None,
+    }
+}
+
+fn claim_refs(record: &Record) -> Vec<EntityId> {
+    match record.content() {
+        Content::Claim(claim) => claim.entity_refs(),
+        _ => Vec::new(),
+    }
+}
+
+/// See [`TitleFold`]. Order is otherwise preserved; nothing is re-scored.
+fn fold_titles(items: Vec<Item<'_>>, prefer_body: bool) -> Vec<Item<'_>> {
+    let mut slots: Vec<Option<Item<'_>>> = items.into_iter().map(Some).collect();
+    let mut kept: Vec<Item<'_>> = Vec::with_capacity(slots.len());
+    let mut seen: BTreeSet<EntityId> = BTreeSet::new();
+    for i in 0..slots.len() {
+        let Some(item) = slots[i].take() else { continue };
+        match title_subject(item.record) {
+            Some(subject) if seen.contains(&subject) => continue,
+            Some(subject) if prefer_body => {
+                // The body, if it is anywhere later, takes this slot.
+                let body = (i + 1..slots.len()).find(|j| {
+                    slots[*j].as_ref().is_some_and(|later| {
+                        title_subject(later.record).is_none()
+                            && claim_refs(later.record).contains(&subject)
+                    })
+                });
+                match body {
+                    Some(j) => {
+                        let body = slots[j].take().expect("found above");
+                        seen.extend(claim_refs(body.record));
+                        kept.push(body);
+                    }
+                    None => {
+                        seen.insert(subject);
+                        kept.push(item);
+                    }
+                }
+            }
+            _ => {
+                seen.extend(claim_refs(item.record));
+                kept.push(item);
+            }
+        }
+    }
+    kept
+}
+
 /// The `share`-word window of `text` that covers the most of the question:
 /// ranked by distinct query terms present, then total occurrences, then
 /// earliest — so two windows mentioning the same term once each lose to one
@@ -1496,6 +1593,8 @@ mod tests {
     use crate::record::Draft;
     use crate::state::ClaimState;
     use crate::projection::StateFilter;
+    use crate::embedding::HashingEmbedder;
+    use crate::value::Value;
 
     struct Fixture {
         ledger: Ledger,
@@ -1582,6 +1681,101 @@ mod tests {
         let covered = retrieve(&index, &ledger, &projection, ViewSpec::now(), &Query::text("fastener newton metres"));
         assert!(covered.unknown_terms.is_empty(), "{:?}", covered.unknown_terms);
         assert_eq!(covered.known, 1.0);
+    }
+
+    fn title_of(subject: EntityId, text: &str) -> Draft {
+        Draft::new(
+            Author::human("Maria"),
+            SourceRef::channel("ingest"),
+            Content::Claim(ClaimContent::Attribute {
+                subject,
+                name: "title".into(),
+                value: Value::Text(text.into()),
+            }),
+        )
+    }
+
+    /// D-0058: a title claim is the same record's shorter half. Listed after
+    /// its body it is dropped; listed before it, it hands its slot to the
+    /// body; with no body in the list it stays, because then it is the only
+    /// witness the list has.
+    #[test]
+    fn a_title_folds_into_its_body_in_either_order_and_stands_alone_otherwise() {
+        let (mut ledger, torque, rail) = setup();
+        let title = ledger.append(title_of(torque, "fastener seating torque")).unwrap();
+        ledger.append(promote(title)).unwrap();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+
+        // "fastener" is in both the title and the body: whichever fusion
+        // seats first, one item about the torque entity comes back, and it
+        // is the body.
+        let found = retrieve(&index, &ledger, &projection, ViewSpec::now(), &Query::text("fastener"));
+        let about_torque: Vec<_> = found
+            .items
+            .iter()
+            .filter(|i| claim_refs(i.record).contains(&torque))
+            .collect();
+        assert_eq!(about_torque.len(), 1, "{:?}", found.items.iter().map(|i| i.record.id()).collect::<Vec<_>>());
+        assert!(title_subject(about_torque[0].record).is_none(), "the body, not the title");
+
+        // A query only the title answers keeps the title: nothing to fold into.
+        let found = retrieve(&index, &ledger, &projection, ViewSpec::now(), &Query::text("seating torque"));
+        assert!(found.items.iter().any(|i| title_subject(i.record) == Some(torque)), "the title stands alone");
+
+        // With folding off, both halves are listed — the old shape, still
+        // reachable for anyone who wants to see the list as fused.
+        let mut keep = Query::text("fastener");
+        keep.titles = TitleFold::Keep;
+        let found = retrieve(&index, &ledger, &projection, ViewSpec::now(), &keep);
+        assert_eq!(found.items.iter().filter(|i| claim_refs(i.record).contains(&torque)).count(), 2);
+        let _ = rail;
+    }
+
+    /// D-0058: beside an item that covers some of the question, an item
+    /// reached by similarity alone that covers none of it is not listed. When
+    /// nothing covers the question, the similarity-only items are the reach
+    /// D-0020 bought and they stay, weak — and with the knob off the padded
+    /// list is back, so the measurement that chose the default can be re-run.
+    ///
+    /// The vector-only hit is the one `vector_tests` already guarantees:
+    /// `licensed` against a record saying `license`, which no token reaches
+    /// and the spelling rule refuses as a suffix.
+    #[test]
+    fn uncovered_vector_items_are_dropped_beside_a_covered_one_and_kept_alone() {
+        let (mut ledger, torque, rail) = setup();
+        let license = ledger
+            .append(prose(rail, "the engine license will be permissive", Author::human("Maria")))
+            .unwrap();
+        ledger.append(promote(license)).unwrap();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let embedder = HashingEmbedder::default();
+        let vectors = VectorIndex::rebuild(&ledger, &embedder);
+        let retriever = index
+            .retriever(&ledger, &projection, ViewSpec::now())
+            .with_vectors(&vectors, &embedder as &dyn Embedder);
+        let uncovered = |found: &Retrieved<'_>| {
+            found.items.iter().filter(|i| matches!(i.via, Via::Vector) && i.coverage <= 0.0).count()
+        };
+
+        // "fastener" covers the torque record; "licensed" reaches the license
+        // record by similarity only.
+        let mixed = retriever.retrieve(&Query::text("fastener licensed"));
+        assert!(mixed.items.iter().any(|i| i.coverage > 0.0 && claim_refs(i.record).contains(&torque)));
+        assert_eq!(uncovered(&mixed), 0, "{:?}", mixed.items.iter().map(|i| (i.coverage, &i.via)).collect::<Vec<_>>());
+
+        let mut keep = Query::text("fastener licensed");
+        keep.drop_uncovered = false;
+        let padded = retriever.retrieve(&keep);
+        assert!(uncovered(&padded) > 0, "with the knob off the similarity-only item is back");
+        assert!(padded.items.len() > mixed.items.len());
+
+        // Nothing covers: the reach stays, and it is weak.
+        let alone = retriever.retrieve(&Query::text("licensed"));
+        assert!(!alone.items.is_empty(), "similarity still reaches when nothing else does");
+        assert!(alone.items.iter().all(|i| i.coverage <= 0.0));
+        assert!(alone.is_abstention());
     }
 
     #[test]

@@ -58,7 +58,7 @@ cargo run -p tacit-keeper -- pending --store target/tacit.log   # what agents pr
 ```
 
 The measurement instruments (`explain`, `calibration`, `fusion_sweep`,
-`indexing_sweep`, `meaning`) exist because every retrieval claim here was
+`indexing_sweep`, `noise_sweep`, `meaning`) exist because every retrieval claim here was
 wrong at least once until an instrument said otherwise; the register records
 the misfilings alongside the fixes.
 

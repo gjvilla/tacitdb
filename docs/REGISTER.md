@@ -62,6 +62,11 @@ What the project has decided and recorded, with owners and review triggers:
   that is not exactly the pinned slice. First grading 16/24; every shortfall
   filed by measurement (`explain --proposals`), two new unknowns registered
   (U-40, U-41), and one ingest fault found by a question designed to catch it.
+- **Two kinds of noise leave the list, measured first** (2026-09-04,
+  D-0058). Similarity-only items covering none of the question, and title
+  claims listed beside their bodies, are dropped from assembly by default;
+  `noise_sweep` graded six settings over both suites and none moved a
+  question. Both are `Query` fields, so the fused list is one setting away.
 - **A refused document writes nothing** (2026-09-04, D-0057). A durable
   ledger is rehearsed in memory before the real pass, so every fault a
   document can carry is found before the first byte reaches the log. The

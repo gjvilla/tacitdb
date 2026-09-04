@@ -28,7 +28,7 @@ pub use lock::{LockError, StoreLock, lock_path};
 pub use verdict::{Ruling, render, retire_reason};
 pub use golden::{
     Expectation, GoldenQuestion, Graded, Scorecard, Verdict, absent_vocabulary, missing_baseline, parse_baseline, parse_golden, quoted_questions,
-    stale_triggers, vocabulary_drift,
+    stale_triggers, vocabulary_drift, run_configured,
 };
 pub use parse::{ParseError, ParsedRecord, parse_corpus};
 pub use pep::{PROPOSAL_KIND, Pep, PepError, PepReport, REQUIRES, Status, ingest_peps, parse_pep};

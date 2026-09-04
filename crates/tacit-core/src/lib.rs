@@ -57,7 +57,7 @@ pub use record::{Draft, Record};
 pub use redact::{RedactReport, redact_store};
 pub use retrieval::{
     BeyondView, Budget, Direction, Expansion, Fusion, Item, Outcome, Probe, Query, Ranking, Retrieved, Retriever,
-    TextIndex, Via, fuse, indexable_text, tokenize,
+    TextIndex, Via, fuse, indexable_text, tokenize, TitleFold,
 };
 pub use state::{ClaimState, GapState, HypothesisState, RecordState};
 pub use validity::Validity;
