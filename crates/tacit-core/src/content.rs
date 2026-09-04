@@ -286,7 +286,7 @@ pub enum VerdictAction {
     /// One verdict over many claims, on a stated footing.
     ///
     /// The targets are enumerated rather than named by a run identifier, and
-    /// that is forced rather than chosen: [`VerdictAction::effects`] is a pure
+    /// that is forced rather than chosen: `VerdictAction::effects` is a pure
     /// function of the action, so a verdict that could not say what it touched
     /// without consulting the ledger would take the state fold's independence
     /// with it. The record is larger and says exactly what it did.
@@ -321,7 +321,7 @@ pub enum VerdictAction {
     },
     /// The hypothesis equivalent of [`VerdictAction::Withdraw`]: a dated
     /// prediction the project stops making before its score date. Separate
-    /// from `Withdraw` because [`VerdictAction::effects`] is a pure function
+    /// from `Withdraw` because `VerdictAction::effects` is a pure function
     /// of the action — it must know the resulting state without consulting the
     /// ledger, and gaps and hypotheses do not share one.
     Abandon {

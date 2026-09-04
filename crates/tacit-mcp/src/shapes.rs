@@ -6,7 +6,7 @@
 //! came from is not an answer this engine gives.
 
 use serde::Serialize;
-use tacit_core::{Content, Ledger, Record, RecordState, indexable_text};
+use tacit_core::{ClaimContent, Content, Ledger, Record, RecordState, indexable_text};
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct EvidenceOut {
@@ -65,7 +65,7 @@ impl RecordOut {
                 .state_of(record.id())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "unknown".into()),
-            text: indexable_text(record).unwrap_or_default(),
+            text: display_text(record),
             author: envelope.author().name.clone(),
             author_kind: format!("{:?}", envelope.author().kind).to_lowercase(),
             author_known_by: envelope.author().detail.clone(),
@@ -151,4 +151,29 @@ fn describe_action(action: &tacit_core::VerdictAction) -> String {
 
 pub fn state_label(state: Option<RecordState>) -> String {
     state.map(|s| s.to_string()).unwrap_or_else(|| "not in the record".into())
+}
+
+/// What a client reads as the record's text. The index's text is the right
+/// input for ranking and the wrong output for a reader: a decision's title,
+/// forces and assertion joined by single spaces read as one run-on sentence,
+/// which is what the first client saw. Here the assertion comes first, since
+/// it is the claim, and the parts are separated; the tokens are unchanged, so
+/// nothing about ranking or the suites moves. An excerpt, when the budget
+/// assembled one, replaces this downstream as before.
+pub fn display_text(record: &Record) -> String {
+    match record.content() {
+        Content::Claim(ClaimContent::Pattern { context, forces, solution, .. }) => {
+            let mut text = solution.trim().to_string();
+            if !context.trim().is_empty() {
+                text.push_str("\n\nContext: ");
+                text.push_str(context.trim());
+            }
+            if !forces.is_empty() {
+                text.push_str("\n\nForces: ");
+                text.push_str(&forces.iter().map(|f| f.trim()).collect::<Vec<_>>().join("; "));
+            }
+            text
+        }
+        _ => indexable_text(record).unwrap_or_default(),
+    }
 }

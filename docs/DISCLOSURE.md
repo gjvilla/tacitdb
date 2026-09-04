@@ -112,6 +112,9 @@ with U-6's counsel item.
 ---
 
 *Recorded 2026-08-24; resolved 2026-08-29 (D-0038); amended 2026-09-03
-(D-0054). Tracked as U-7 in [REGISTER.md](REGISTER.md). The licence is settled
+(D-0054). The counts on this page — commits, lines, tests — are as of the
+dates named beside them and are not updated: this is the record of a
+closed question, and the repository is the current record of the work.
+Tracked as U-7 in [REGISTER.md](REGISTER.md). The licence is settled
 (D-0050); the source no longer waits on anything to be public, and publishing
 the crates under the name still waits on U-6.*

@@ -214,6 +214,70 @@ was agreed. That last one needs a baseline; `GOLDEN_BASELINE=1` prints one
 to paste into the file after the first run.
 
 
+## Using the engine directly
+
+`tacit-core` is an ordinary Rust library with no I/O of its own; the host and
+the keeper are callers. The crates are not on a registry yet
+([U-6](docs/REGISTER.md)), so depend on the repository:
+
+```toml
+[dependencies]
+tacit-core = { git = "https://github.com/gjvilla/tacitdb", package = "tacit-core" }
+```
+
+The whole loop is forty lines, and the same program runs as the crate's doc
+test (`cargo test -p tacit-core --doc`):
+
+```rust
+use tacit_core::{
+    Author, ClaimContent, Content, Draft, Ledger, Outcome, Projection, Query, SourceRef,
+    TextIndex, VerdictAction, VerdictContent, ViewSpec,
+};
+
+fn main() -> Result<(), tacit_core::Error> {
+    let mut ledger = Ledger::new();
+    let billing = ledger.add_entity("service", "billing")?;
+
+    // An agent proposes. It lands as `proposed` and stays there.
+    let claim = ledger.append(Draft::new(
+        Author::agent("cost-bot"),
+        SourceRef::channel("nightly report"),
+        Content::Claim(ClaimContent::Text {
+            body: "billing runs on the shared Postgres cluster".into(),
+            about: vec![billing],
+        }),
+    ))?;
+
+    // A person rules. Only a human may author a verdict; the ledger refuses otherwise.
+    ledger.append(Draft::new(
+        Author::human("Jordan Lee"),
+        SourceRef::channel("keyboard"),
+        Content::Verdict(VerdictContent {
+            action: VerdictAction::Promote { target: claim, retiring: None },
+            rationale: Some("confirmed in the runbook".into()),
+        }),
+    ))?;
+
+    // Ask. The default view is what the organization has actually agreed.
+    let index = TextIndex::rebuild(&ledger);
+    let projection = Projection::rebuild(&ledger);
+    let retriever = index.retriever(&ledger, &projection, ViewSpec::now());
+
+    let found = retriever.retrieve(&Query::text("where does billing run"));
+    assert_eq!(found.outcome, Outcome::Matches);
+
+    let miss = retriever.retrieve(&Query::text("who owns the mobile app"));
+    assert!(miss.is_abstention());
+    println!("never written here: {:?}", miss.unknown_terms);
+    Ok(())
+}
+```
+
+`Ledger::open(path)` instead of `Ledger::new()` makes it durable; add
+`.with_vectors(&VectorIndex::rebuild(&ledger, &embedder), &embedder)` to the
+retriever for the similarity channel. `cargo doc --no-deps -p tacit-core`
+is the reference.
+
 ## Status, stated plainly
 
 Working v1, pre-release, single author. Rust 1.88 or later. The `tacit-python`

@@ -185,7 +185,7 @@ const TABLES: usize = 8;
 /// A vector index, and the neighbourhoods that let a query avoid reading all
 /// of it.
 ///
-/// Each vector carries a [`BUCKET_BITS`]-bit signature: bit *i* is the sign of
+/// Each vector carries a `BUCKET_BITS`-bit signature: bit *i* is the sign of
 /// its dot product with hyperplane *i*. Two vectors close in cosine agree on
 /// most bits, so a query need only look at the signature it hashes into and
 /// the ring of signatures around it (U-26).
