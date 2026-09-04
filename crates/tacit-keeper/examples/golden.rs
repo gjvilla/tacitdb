@@ -1,6 +1,13 @@
-//! Grade the engine against the golden suite.
+//! Grade the engine against a golden suite.
 //!
-//! `cargo run -p tacit-keeper --example golden`
+//! `cargo run -p tacit-keeper --example golden [CORPUS_ROOT]`
+//!
+//! Without an argument it grades this repository against `docs/GOLDEN.md`.
+//! With one, it grades that corpus — `docs/DECISIONS.md` and
+//! `docs/REGISTER.md` beneath the root — against the root's own
+//! `docs/GOLDEN.md`, in the same format and under the same audits (D-0059).
+//! A suite's first run has no vocabulary baseline; `GOLDEN_BASELINE=1`
+//! prints one to paste into the document.
 //!
 //! Exits non-zero on a regression — a failure nothing predicted. Known
 //! shortfalls are reported and counted, not treated as passes and not treated
@@ -13,16 +20,24 @@ use tacit_keeper::corpus::ingest_corpus;
 use tacit_keeper::golden::{Scorecard, Verdict, parse_golden, run_with};
 
 fn main() -> ExitCode {
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut args = std::env::args().skip(1);
+    let repo = match args.next() {
+        Some(flag) if flag == "-h" || flag == "--help" => {
+            eprintln!("usage: golden [CORPUS_ROOT]   (default: this repository)");
+            return ExitCode::from(2);
+        }
+        Some(root) => PathBuf::from(root),
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+    };
     let mut ledger = Ledger::new();
     if let Err(error) = ingest_corpus(&mut ledger, &repo) {
-        eprintln!("could not load the corpus: {error}");
+        eprintln!("could not load the corpus at {}: {error}", repo.display());
         return ExitCode::FAILURE;
     }
     let text = match std::fs::read_to_string(repo.join("docs/GOLDEN.md")) {
         Ok(text) => text,
         Err(error) => {
-            eprintln!("could not read docs/GOLDEN.md: {error}");
+            eprintln!("could not read {}: {error}", repo.join("docs/GOLDEN.md").display());
             return ExitCode::FAILURE;
         }
     };
@@ -50,7 +65,7 @@ fn main() -> ExitCode {
         &questions,
     );
 
-    println!("\n\x1b[1mGOLDEN SUITE\x1b[0m");
+    println!("\n\x1b[1mGOLDEN SUITE\x1b[0m  {}", repo.display());
     println!("{}", "─".repeat(64));
     for graded in &card.graded {
         let mark = if graded.verdict.is_pass() {

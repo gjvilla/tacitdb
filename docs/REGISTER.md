@@ -62,6 +62,10 @@ What the project has decided and recorded, with owners and review triggers:
   that is not exactly the pinned slice. First grading 16/24; every shortfall
   filed by measurement (`explain --proposals`), two new unknowns registered
   (U-40, U-41), and one ingest fault found by a question designed to catch it.
+- **The suite grades any record** (2026-09-04, D-0059). `golden <root>` and
+  `explain --corpus <root>` grade and explain a corpus in the document
+  format against its own `docs/GOLDEN.md`, under every audit this
+  repository's suite runs. The format did not change; only the path did.
 - **Two kinds of noise leave the list, measured first** (2026-09-04,
   D-0058). Similarity-only items covering none of the question, and title
   claims listed beside their bodies, are dropped from assembly by default;

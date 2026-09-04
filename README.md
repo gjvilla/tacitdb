@@ -181,6 +181,37 @@ verdict says so. The store is locked while either the host or the command
 holds it, so stop the host first; the verdict is in the log when it next
 starts.
 
+### Grade your own record
+
+The graded suite is not only this repository's test. Write questions your
+record should and should not answer into `docs/GOLDEN.md` beside the other
+two files, and the same runner grades them, abstention counted as a pass:
+
+```markdown
+## Questions
+
+| id | Question | Expect | Owner | Review trigger |
+|----|----------|--------|-------|----------------|
+| G-01 | where are runtime feature flags managed | answer D-0002 | Jordan Lee | when the contract is renewed |
+| G-02 | which region hosts the disaster recovery replica | abstain U-1 | Jordan Lee | when U-1 resolves |
+| G-03 | what framework does the mobile app use | abstain | Jordan Lee | never — nothing here is about mobile |
+```
+
+```bash
+cargo run -p tacit-keeper --example golden -- /path/to/acme
+cargo run -p tacit-keeper --example explain -- --corpus /path/to/acme G-02   # why a question graded as it did
+```
+
+`answer D-0002` means the record settles it and that decision is the one;
+`abstain U-1` means it does not, and that open question covers the territory;
+`abstain` alone means nobody has even registered the question. The runner
+exits non-zero on a failure nothing predicted, and runs the same audits it
+runs here: a question resting on a trigger that has fired, a record that
+quotes a question back, a word the corpus has acquired since the question
+was agreed. That last one needs a baseline; `GOLDEN_BASELINE=1` prints one
+to paste into the file after the first run.
+
+
 ## Status, stated plainly
 
 Working v1, pre-release, single author. Rust 1.88 or later. The `tacit-python`

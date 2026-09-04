@@ -2857,6 +2857,54 @@ reason the rule reads as it does).
 
 ---
 
+## D-0059 · The suite grades any record, not only this one
+
+```yaml
+id: D-0059
+state: promoted
+author: Greg Villa
+recorded: 2026-09-04
+valid_from: 2026-09-04
+source: the first cold read of the public repository, which found the graded
+  suite to be the project's most transferable idea and its least transferable
+  code
+evidence: [docs/GOLDEN.md, REQUIREMENTS.md R-10]
+review_trigger: when a second corpus format exists and its golden file cannot
+  be expressed in the five-column table; or when a user's suite needs an
+  audit this repository's does not
+```
+
+**Assertion.** `golden` takes a corpus root as its argument and `explain`
+takes `--corpus <root>`. Given one, each ingests that root's decision and
+register documents and grades or explains it against the root's own
+`docs/GOLDEN.md`, in the five-column format this repository uses, under the
+same audits: fired triggers, quoted questions, acquired vocabulary, unowned
+questions, and pending markers that must name a registered unknown. Without
+an argument both behave exactly as before. Nothing in the runner was
+specific to this repository except the path.
+
+**Forces.** Abstention graded as a pass is the idea a stranger takes away
+from this repository, and until now the only corpus it could be applied to
+was this one — the runner joined a hard-coded root to three file names. A
+team that has written its decisions in the document format and served them
+over MCP had no way to ask the question the suite asks: does our record
+answer what it should and decline what it should not, and does that stay
+true as the record grows. The format needs no change; the Acme corpus from
+the cold read carried a four-question suite on the first try, two answers
+and two abstentions, one citing its register, and graded four of four with
+the baseline printed for pasting — after the quote audit refused the first
+draft, because one question repeated five words of a record's title. The
+audits are for the first-time user before they are for anyone.
+
+**Alternatives rejected.** A separate binary (the runner is the instrument,
+and two of them would drift); a golden file path independent of the root
+(a suite agreed against one corpus and run over another measures nothing —
+the proposals suite's lesson — so the file lives with the record it grades);
+relaxing the audits for a user corpus (they are the reason the suite stays
+honest as a record grows, and a first-time user is exactly who they protect).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

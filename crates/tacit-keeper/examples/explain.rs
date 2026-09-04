@@ -1,6 +1,7 @@
 //! Why retrieval ranked what it ranked.
 //!
 //! `cargo run -p tacit-keeper --example explain [G-09 G-13 ...]`
+//! `cargo run -p tacit-keeper --example explain --corpus /path/to/root [G-02 ...]`
 //!
 //! The golden suite grades outcomes; this is the instrument for the step before
 //! them. "The suite is red" is not a diagnosis, and the four things it can mean
@@ -23,14 +24,23 @@ use tacit_keeper::corpus::ingest_corpus;
 use tacit_keeper::golden::{Expectation, parse_golden, parse_golden_rows};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     // `--proposals` explains the P-suite over the pinned slice instead of the
     // self-hosting corpus — same instrument, other ledger. The register's
     // lesson stands for both: a failure filed under an unmeasured cause is
-    // what this exists to prevent.
+    // what this exists to prevent. `--corpus <root>` turns the instrument on
+    // any corpus in the document format, graded against the root's own
+    // docs/GOLDEN.md (D-0059).
     let mut only: Vec<String> = std::env::args().skip(1).collect();
     let proposals = only.iter().any(|a| a == "--proposals");
     only.retain(|a| a != "--proposals");
+    if let Some(at) = only.iter().position(|a| a == "--corpus") {
+        let Some(root) = only.get(at + 1).cloned() else {
+            return Err("--corpus needs a path".into());
+        };
+        repo = PathBuf::from(root);
+        only.drain(at..=at + 1);
+    }
 
     let mut ledger = Ledger::new();
     let questions = if proposals {
