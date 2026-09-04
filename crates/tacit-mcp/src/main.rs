@@ -15,6 +15,35 @@ use tacit_core::Ledger;
 use std::collections::BTreeSet;
 use tacit_keeper::{Attest, Disposition};
 
+/// What `--help` prints. Written to stdout, the one time that channel is not
+/// MCP: nobody is on the other end of a process that exits before it serves,
+/// and a shell expects help where a shell looks for it.
+const USAGE: &str = "\
+tacit-mcp — serve a decision-record corpus over MCP (stdio)
+
+Usage: tacit-mcp [OPTIONS] [CORPUS]
+
+Arguments:
+  CORPUS                 A directory holding docs/DECISIONS.md and docs/REGISTER.md.
+                         Both are read on every start as a sync: unchanged records
+                         write nothing, edited ones supersede what they replace.
+                         Without one the host serves an empty store.
+
+Options:
+  --store <PATH>         Keep the ledger on disk at PATH, with its audit log beside
+                         it as PATH.audit. Without it the ledger dies at exit.
+  --require-signature    Decline to transcribe a promotion whose words no signed
+                         commit carries; the claim stays proposed. The default
+                         records what git can establish and says so in the verdict.
+  --signed-by <NAME>     Accept promotions only from NAME's verified signature.
+                         Repeatable. Implies --require-signature.
+  -h, --help             Print this and exit.
+
+The tool surface has no promote tool. What an agent proposes waits for a person,
+who promotes by writing the decision into docs/DECISIONS.md. See the README's
+\"Your own corpus\" section for the document format.
+";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stdout is the MCP channel; everything human-facing goes to stderr.
@@ -50,8 +79,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 require_signature = true;
                 index += 2;
             }
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                std::process::exit(0);
+            }
             other if other.starts_with('-') => {
-                eprintln!("tacit-mcp: unknown option {other}");
+                eprintln!("tacit-mcp: unknown option {other} (try --help)");
                 std::process::exit(2);
             }
             other => {

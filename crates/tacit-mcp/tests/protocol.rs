@@ -308,3 +308,33 @@ fn a_bad_id_is_a_clean_error_not_a_panic() {
     let names = host.tool_names();
     assert!(!names.is_empty());
 }
+
+/// `--help` is the one thing a stranger types first. It answers on stdout,
+/// exits clean, and names every option the parser actually accepts — checked
+/// here so the help cannot drift from the code it describes.
+#[test]
+fn help_names_every_option_and_exits_clean() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tacit-mcp"))
+        .arg("--help")
+        .output()
+        .expect("host runs");
+    assert!(output.status.success(), "help exits 0");
+    let text = String::from_utf8(output.stdout).expect("utf8");
+    for option in ["--store", "--require-signature", "--signed-by", "--help"] {
+        assert!(text.contains(option), "help mentions {option}");
+    }
+    assert!(text.contains("docs/DECISIONS.md"), "help says where the corpus lives");
+}
+
+/// An unknown option still fails, and now points at the help instead of
+/// leaving the reader to open main.rs.
+#[test]
+fn an_unknown_option_points_at_help() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tacit-mcp"))
+        .arg("--halp")
+        .output()
+        .expect("host runs");
+    assert_eq!(output.status.code(), Some(2));
+    let text = String::from_utf8(output.stderr).expect("utf8");
+    assert!(text.contains("--help"), "stderr was: {text}");
+}

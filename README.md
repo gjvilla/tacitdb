@@ -60,6 +60,91 @@ The measurement instruments (`explain`, `calibration`, `fusion_sweep`,
 wrong at least once until an instrument said otherwise; the register records
 the misfilings alongside the fixes.
 
+## Your own corpus
+
+The host reads two files beneath whatever directory you hand it:
+`docs/DECISIONS.md` and `docs/REGISTER.md`. Nothing else is looked at, no
+git repository is required, and the format is the one this repository's own
+documents use — strict on purpose, because a corpus about honesty must not
+silently drop what it does not understand. A malformed record is a hard
+error that names the record and the problem.
+
+The smallest corpus that loads:
+
+````markdown
+# Acme Platform — Decisions
+
+## D-0001 · Postgres is the system of record
+
+```yaml
+id: D-0001
+state: promoted
+author: Jordan Lee
+recorded: 2026-06-02
+valid_from: 2026-06-02
+source: platform guild meeting
+evidence: []
+review_trigger: sustained write load above 20k rows per second on any table
+```
+
+**Assertion.** All services persist durable state in the shared Postgres
+cluster. No service runs its own database without a decision superseding
+this one.
+
+**Forces.** One backup story, one on-call runbook, one credential rotation.
+````
+
+```markdown
+# Acme Platform — Register
+
+## Room 2 · Known unknowns
+
+| id | Question | Trigger | Notes |
+|----|----------|---------|-------|
+| U-1 | Which region should the disaster-recovery replica live in | the 2027 compliance audit | Legal has not said whether EU data may leave eu-west-1. |
+
+Owner: Jordan Lee.
+```
+
+The rules the parser enforces, so you meet them the first time:
+
+- A record heading is `## D-nnnn · Title` — the `·` separator and four
+  digits are load-bearing. Hypotheses use `H-nnnn`.
+- The yaml block needs `id`, `state`, `author`, `source`, and `valid_from`;
+  `recorded`, `evidence`, and `review_trigger` are optional. Any other key
+  is an error. Every `evidence` path must exist, looked up under `docs/`
+  first and then the repository root; an unresolvable one is an error.
+- `state` is an instruction to the ingester, not a stored field, and only
+  `promoted` (a decision) and `registered` (a hypothesis) are accepted. A
+  document does not hold proposals; agents make those through the tool
+  surface, and they wait there.
+- Prose lives in bold-labelled sections — `**Assertion.**` is required, the
+  rest are yours. Unlabelled prose is an error.
+- The register needs an `Owner: Name` line somewhere in the file, because
+  every open question is a record and a record has an author. Only rows
+  beginning `| U-` are read; each is one line with four cells.
+
+Then serve it, durably:
+
+```bash
+cargo run -p tacit-mcp -- --store acme.log /path/to/acme
+```
+
+Point any MCP client at that command and it gets `tacit_search` with
+citations and calibrated abstention, `tacit_open_questions`,
+`tacit_propose_claim`, the pending inbox, and an audit log beside the store.
+Every start is a sync, so edit the documents and restart: unchanged records
+write nothing, edited ones supersede what they replace.
+
+Three things worth knowing before you rely on it. This is the only ingest
+format today; the proposals suite shows a second parser is a few hundred
+lines against `tacit-core`, but you would be writing it. An ingest that fails
+partway has already written what preceded the failure — reruns are
+idempotent, so fix the document and start again rather than deleting the
+store. And a person promotes an agent's proposal by writing the decision into
+`docs/DECISIONS.md`, not by touching the store. There is no verdict command
+yet.
+
 ## Status, stated plainly
 
 Working v1, pre-release, single author. **Dual-licensed MIT OR Apache-2.0**
