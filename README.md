@@ -1,5 +1,7 @@
 # Tacit
 
+![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue) ![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange)
+
 A provenance-first knowledge engine for agentic workloads, built from
 production scar tissue and run under its own discipline: every claim carries
 an envelope (who said it, from what source, when it holds, what would trigger
