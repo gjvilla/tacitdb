@@ -194,7 +194,7 @@ two files, and the same runner grades them, abstention counted as a pass:
 
 | id | Question | Expect | Owner | Review trigger |
 |----|----------|--------|-------|----------------|
-| G-01 | where are runtime feature flags managed | answer D-0002 | Jordan Lee | when the contract is renewed |
+| G-01 | where do services persist durable state | answer D-0001 | Jordan Lee | when a service is allowed its own database |
 | G-02 | which region hosts the disaster recovery replica | abstain U-1 | Jordan Lee | when U-1 resolves |
 | G-03 | what framework does the mobile app use | abstain | Jordan Lee | never — nothing here is about mobile |
 ```
@@ -204,7 +204,7 @@ cargo run -p tacit-keeper --example golden -- /path/to/acme
 cargo run -p tacit-keeper --example explain -- --corpus /path/to/acme G-02   # why a question graded as it did
 ```
 
-`answer D-0002` means the record settles it and that decision is the one;
+`answer D-0001` means the record settles it and that decision is the one;
 `abstain U-1` means it does not, and that open question covers the territory;
 `abstain` alone means nobody has even registered the question. The runner
 exits non-zero on a failure nothing predicted, and runs the same audits it

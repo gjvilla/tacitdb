@@ -51,10 +51,14 @@ struct Args {
     record: Option<String>,
 }
 
+/// `--help` asked for, as distinct from usage got wrong: the first answers on
+/// stdout and exits 0, like the host; the second explains on stderr and exits 2.
+const HELP_ASKED: &str = "--help";
+
 fn parse(raw: Vec<String>) -> Result<Args, String> {
     let mut it = raw.into_iter();
     let command = match it.next() {
-        Some(c) if c == "-h" || c == "--help" => return Err(String::new()),
+        Some(c) if c == "-h" || c == "--help" => return Err(HELP_ASKED.to_string()),
         Some(c) => c,
         None => return Err(String::new()),
     };
@@ -75,7 +79,7 @@ fn parse(raw: Vec<String>) -> Result<Args, String> {
             "--why" => args.why = Some(value("--why")?),
             "--retiring" => args.retiring = Some(value("--retiring")?),
             "--reason" => args.reason = Some(value("--reason")?),
-            "-h" | "--help" => return Err(String::new()),
+            "-h" | "--help" => return Err(HELP_ASKED.to_string()),
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             other => {
                 if args.record.replace(other.to_string()).is_some() {
@@ -103,6 +107,10 @@ fn usage_error(message: &str) -> ExitCode {
 fn main() -> ExitCode {
     let args = match parse(std::env::args().skip(1).collect()) {
         Ok(args) => args,
+        Err(message) if message == HELP_ASKED => {
+            print!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
         Err(message) => return usage_error(&message),
     };
     let Some(store) = args.store.clone() else { return usage_error("--store is required") };
