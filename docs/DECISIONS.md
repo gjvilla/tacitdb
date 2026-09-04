@@ -2677,6 +2677,60 @@ either.
 
 ---
 
+## D-0056 · An abstention travels with its reasons
+
+```yaml
+id: D-0056
+state: promoted
+author: Greg Villa
+recorded: 2026-09-04
+valid_from: 2026-09-04
+source: the first cold read of the public repository, which met a weak match
+  with the right record in first place and could not tell why
+evidence: [REQUIREMENTS.md R-10, docs/GOLDEN.md]
+review_trigger: when a fourth condition joins coverage, known and score in the
+  confidence rule, or when a client is found reading the summary sentence
+  instead of the numbers it is made from
+```
+
+**Assertion.** `tacit_search` returns a `why` beside its outcome: the first
+item's coverage and the bar it was read against, how much of the question the
+record can speak to at all and that bar, which of the rule's conditions fell
+short by name, every term the index read as a neighbour, every discriminating
+term the record has never written, and the same in one sentence. The numbers
+are the engine's own — the two that `Retrieved` has carried since D-0043 with
+a comment saying they were published beside the outcome, which was true of
+the library and not of the wire. One addition to the engine: the words behind
+`known` are now named, not only weighed. Nothing is judged twice, and no new
+quantity confers confidence; D-0042's refusal stands.
+
+**Forces.** R-10 makes abstention an answer, and an answer that cannot say
+why it declined is a shrug with a tag on it. The stranger's case was exact: a
+three-record store, the right record in first place, and the reply "weak
+matches". Read from outside, that is the engine finding the answer and
+refusing to say so. Read with the numbers — which this record's own field
+produced, and which corrected the account its author was about to write —
+the record could speak to only half the question, because one word of it,
+"keep", had never been written there and carried the other half of the
+weight; the first item covered everything that could be covered. The
+reader's next move is to rephrase around that word, not to distrust the
+record, and nothing in the reply said which word. The instrument that says
+this existed (`explain`), as an example
+binary over this repository's own suites, which is the one place a user's
+question never is. What the client needs is the smaller half of what the
+instrument prints, and it needs it in the reply.
+
+**Alternatives rejected.** Printing the summary sentence alone (a sentence is
+for a person; a client that wants to act needs the fields, and a sentence
+without them invites paraphrase — the trigger names the day that is seen);
+lowering the bar so the stranger's case passes (measured and refused twice,
+D-0042 and D-0043, and a bar moved for one corpus is fitted to it); exposing
+`explain` as a tool (its other half — fused against lexical against vector,
+with the expected record's rank in each — is about a suite's question, and a
+client has no expected record).
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml

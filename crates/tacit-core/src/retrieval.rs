@@ -554,6 +554,11 @@ pub struct Retrieved<'a> {
     /// Published because a search that quietly answers a different question
     /// than the one typed is worse than one that finds nothing.
     pub read_as: Vec<(String, String)>,
+    /// Discriminating query terms the corpus has never written and the index
+    /// could not read as a neighbour — the words behind the gap between
+    /// `known` and 1.0. A reader told "the record can speak to 0.4 of this"
+    /// and not which words are the other 0.6 cannot rephrase the question.
+    pub unknown_terms: Vec<String>,
     /// Vectors examined. Equal to the index size under `Probe::Exact` and much
     /// smaller under `Probe::Neighbourhoods` — published so an approximation is
     /// something a caller can see the size of rather than infer.
@@ -691,6 +696,10 @@ struct Candidates {
     /// second condition on confidence rather than a relaxation of the first —
     /// a question can only get harder to answer confidently, never easier.
     missing_idf: f64,
+    /// The terms behind `missing_idf`, by name: no posting, and no index
+    /// term within one edit to read them as. Published so "the corpus
+    /// cannot speak to half of this" can say which half.
+    unknown: Vec<String>,
     /// Records the view refused whose postings matched anyway (U-40). The
     /// scan already reads their postings and used to drop them without a
     /// trace, so a caller could not tell "the corpus has nothing" from "your
@@ -967,6 +976,7 @@ impl<'a> Retriever<'a> {
             coverage,
             known,
             read_as: candidates.read_as.clone(),
+            unknown_terms: candidates.unknown.clone(),
             scanned,
             beyond_view,
         }
@@ -1055,6 +1065,7 @@ impl<'a> Retriever<'a> {
         let mut total_idf = 0.0;
         let mut missing_idf = 0.0;
         let mut read_as: Vec<(String, String)> = Vec::new();
+        let mut unknown: Vec<String> = Vec::new();
         for term in &discriminating {
             // A term the index does not have may be a spelling of one it does.
             // Tried only here, at the point the term would otherwise contribute
@@ -1083,6 +1094,7 @@ impl<'a> Retriever<'a> {
                 let weight = ((n + 0.5) / 0.5 + 1.0).ln();
                 total_idf += weight;
                 missing_idf += weight;
+                unknown.push((*term).clone());
                 continue;
             };
             // Document frequency is a collection statistic, computed over the
@@ -1154,7 +1166,7 @@ impl<'a> Retriever<'a> {
         };
         let (ranked, matched_idf) = reduce(scores, matched);
         let (shadow, shadow_matched) = reduce(shadow_scores, shadow_matched);
-        Candidates { ranked, read_as, matched_idf, total_idf, missing_idf, shadow, shadow_matched }
+        Candidates { ranked, read_as, matched_idf, total_idf, missing_idf, unknown, shadow, shadow_matched }
     }
 
     fn log_order(&self, id: RecordId) -> usize {
@@ -1546,6 +1558,30 @@ mod tests {
         query: &Query,
     ) -> Retrieved<'a> {
         index.retriever(ledger, projection, spec).retrieve(query)
+    }
+
+    /// The words behind `known`: a question half made of terms nobody here
+    /// has written names those terms, so the reader can tell "answered
+    /// shallowly" from "could not have been answered" without the instrument.
+    #[test]
+    fn unknown_terms_are_named_not_only_weighed() {
+        let (ledger, _, _) = setup();
+        let index = TextIndex::rebuild(&ledger);
+        let projection = Projection::rebuild(&ledger);
+        let found = retrieve(
+            &index,
+            &ledger,
+            &projection,
+            ViewSpec::now(),
+            &Query::text("fastener zeppelin marmalade"),
+        );
+        let mut unknown = found.unknown_terms.clone();
+        unknown.sort();
+        assert_eq!(unknown, vec!["marmalade".to_string(), "zeppelin".to_string()]);
+        assert!(found.known < 1.0, "known {} should reflect the two unknown words", found.known);
+        let covered = retrieve(&index, &ledger, &projection, ViewSpec::now(), &Query::text("fastener newton metres"));
+        assert!(covered.unknown_terms.is_empty(), "{:?}", covered.unknown_terms);
+        assert_eq!(covered.known, 1.0);
     }
 
     #[test]

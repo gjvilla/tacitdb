@@ -62,6 +62,11 @@ What the project has decided and recorded, with owners and review triggers:
   that is not exactly the pinned slice. First grading 16/24; every shortfall
   filed by measurement (`explain --proposals`), two new unknowns registered
   (U-40, U-41), and one ingest fault found by a question designed to catch it.
+- **An abstention says why** (2026-09-04, D-0056). `tacit_search` carries a
+  `why`: the first item's coverage and how much of the question the record
+  can speak to, each beside its bar, the conditions that fell short by name,
+  terms read as neighbours, and the words the record has never written. The
+  engine's own numbers, on the wire at last; nothing judged twice.
 - **A person can rule from the keyboard, and a store has one holder**
   (2026-09-04, D-0055). `tacit-keeper pending|promote|reject|retire --store
   <path>` renders one verdict at a time under a typed name and a required

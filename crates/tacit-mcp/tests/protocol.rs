@@ -151,6 +151,62 @@ fn search_abstains_on_what_the_record_does_not_cover() {
     assert!(!tags.contains(&"matches"), "got {tags:?}");
 }
 
+/// An abstention says why (D-0056): the numbers the rule read, the bars it
+/// read them against, which fell short, and the words the record has never
+/// used — so a caller can rephrase instead of guessing.
+#[test]
+fn an_abstention_explains_itself_in_the_rules_own_numbers() {
+    let mut host = Host::start();
+    let out = host.call(
+        "tacit_search",
+        json!({"query": "how does sharding across geographic regions work"}),
+    );
+    assert_eq!(out["is_abstention"], true);
+    let why = &out["why"];
+    assert_eq!(why["outcome"], out["tags"][0]);
+    let coverage = why["coverage"].as_f64().unwrap();
+    let known = why["known"].as_f64().unwrap();
+    let min_coverage = why["min_coverage"].as_f64().unwrap();
+    let min_known = why["min_known"].as_f64().unwrap();
+    let short_of: Vec<&str> = why["short_of"].as_array().unwrap().iter().map(|s| s.as_str().unwrap()).collect();
+    assert!(!short_of.is_empty(), "an abstention names what fell short: {why}");
+    // Each named shortfall is a real one, in the published numbers.
+    for what in &short_of {
+        match *what {
+            "coverage" => assert!(coverage < min_coverage, "{why}"),
+            "known" => assert!(known < min_known, "{why}"),
+            "relevance" => {}
+            other => panic!("unknown shortfall {other}"),
+        }
+    }
+    assert!(why["summary"].as_str().is_some_and(|s| s.contains("confident match needs")), "{why}");
+}
+
+#[test]
+fn a_confident_match_explains_itself_too_and_falls_short_of_nothing() {
+    let mut host = Host::start();
+    let out = host.call(
+        "tacit_search",
+        json!({"query": "why is the runtime embedded rather than a server"}),
+    );
+    assert_eq!(out["is_abstention"], false);
+    let why = &out["why"];
+    assert_eq!(why["outcome"], "matches");
+    assert!(why["short_of"].as_array().unwrap().is_empty(), "{why}");
+    assert!(why["coverage"].as_f64().unwrap() >= why["min_coverage"].as_f64().unwrap());
+    assert!(why["known"].as_f64().unwrap() >= why["min_known"].as_f64().unwrap());
+}
+
+#[test]
+fn words_the_record_never_used_are_named() {
+    let mut host = Host::start();
+    let out = host.call("tacit_search", json!({"query": "embedded runtime zeppelin marmalade"}));
+    let unknown: Vec<&str> =
+        out["why"]["unknown_terms"].as_array().unwrap().iter().map(|s| s.as_str().unwrap()).collect();
+    assert!(unknown.contains(&"zeppelin") && unknown.contains(&"marmalade"), "{:?}", out["why"]);
+    assert!(out["why"]["summary"].as_str().unwrap().contains("never written here"), "{:?}", out["why"]);
+}
+
 #[test]
 fn open_questions_are_citable() {
     let mut host = Host::start();

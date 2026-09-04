@@ -80,6 +80,146 @@ pub struct SearchOutput {
     /// `full_history: true`, where it comes back labeled by its state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub beyond_view: Option<BeyondViewOut>,
+    /// Why the outcome is what it is: the numbers the rule read and the bars
+    /// it read them against, so a `weak_matches` can be told apart — a
+    /// shallow first item, a question mostly made of words the record has
+    /// never used, or a term read as its neighbour — without opening the
+    /// source. The numbers are the engine's own; nothing here is judged twice.
+    pub why: WhyOut,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct WhyOut {
+    /// `matches`, `weak_matches`, or `none`.
+    pub outcome: String,
+    /// How much of the question's discriminating weight the *first* item
+    /// covers. First, not best (D-0043): a later item covering more is listed
+    /// with its own `coverage`, and weighing it takes knowing what the words
+    /// mean.
+    pub coverage: f64,
+    /// The bar `coverage` must clear.
+    pub min_coverage: f64,
+    /// How much of the question the record can speak to at all — the weight
+    /// of its discriminating terms that appear anywhere in the view.
+    pub known: f64,
+    /// The bar `known` must clear.
+    pub min_known: f64,
+    /// Which conditions fell short: `coverage`, `known`, or `relevance`.
+    /// Empty for a confident match; also empty for `none`, where nothing was
+    /// read at all.
+    pub short_of: Vec<String>,
+    /// Query terms the index held no posting for and read as a spelling of
+    /// one it has, as asked -> read_as. A search that quietly answers a
+    /// different question than the one typed is worse than one that finds
+    /// nothing.
+    pub read_as: Vec<ReadAsOut>,
+    /// Discriminating terms the record has never written. The words behind
+    /// the distance between `known` and 1.0; rephrase around them or accept
+    /// that the record cannot answer.
+    pub unknown_terms: Vec<String>,
+    /// The above in one sentence.
+    pub summary: String,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ReadAsOut {
+    pub asked: String,
+    pub read_as: String,
+}
+
+impl WhyOut {
+    fn of(found: &tacit_core::Retrieved<'_>, query: &Query) -> Self {
+        let round = |x: f64| (x * 100.0).round() / 100.0;
+        let outcome = found.tags()[0].to_string();
+        let best = found.items.first().map(|i| i.relevance).unwrap_or(0.0);
+        let mut short_of = Vec::new();
+        if found.outcome == tacit_core::Outcome::WeakMatches {
+            if found.coverage < query.min_coverage {
+                short_of.push("coverage".to_string());
+            }
+            if best < query.min_score {
+                short_of.push("relevance".to_string());
+            }
+            if found.known < query.min_known {
+                short_of.push("known".to_string());
+            }
+        }
+        let read_as: Vec<ReadAsOut> = found
+            .read_as
+            .iter()
+            .map(|(asked, near)| ReadAsOut { asked: asked.clone(), read_as: near.clone() })
+            .collect();
+        let unknown_terms = found.unknown_terms.clone();
+
+        let mut parts: Vec<String> = Vec::new();
+        match found.outcome {
+            tacit_core::Outcome::None => parts.push(
+                "nothing in this view shares a discriminating word with the question".to_string(),
+            ),
+            tacit_core::Outcome::Matches => parts.push(format!(
+                "the first item covers {:.2} of the question's discriminating weight and the \
+                 record can speak to {:.2} of it; both clear {:.2}",
+                found.coverage, found.known, query.min_coverage
+            )),
+            tacit_core::Outcome::WeakMatches => {
+                let short_coverage = short_of.iter().any(|s| s == "coverage");
+                let short_known = short_of.iter().any(|s| s == "known");
+                if short_coverage && short_known && query.min_coverage == query.min_known {
+                    parts.push(format!(
+                        "the first item covers {:.2} of the question's discriminating weight and \
+                         the record can speak to only {:.2} of it; a confident match needs {:.2} \
+                         on both",
+                        found.coverage, found.known, query.min_coverage
+                    ));
+                } else {
+                    if short_coverage {
+                        parts.push(format!(
+                            "the first item covers {:.2} of the question's discriminating weight; \
+                             a confident match needs {:.2}",
+                            found.coverage, query.min_coverage
+                        ));
+                    }
+                    if short_known {
+                        parts.push(format!(
+                            "the record can speak to only {:.2} of the question; a confident \
+                             match needs {:.2}",
+                            found.known, query.min_known
+                        ));
+                    }
+                }
+                if short_of.iter().any(|s| s == "relevance") {
+                    parts.push(format!(
+                        "the best score {best:.2} is under the floor {:.2}",
+                        query.min_score
+                    ));
+                }
+            }
+        }
+        if !unknown_terms.is_empty() {
+            parts.push(format!("never written here: {}", unknown_terms.join(", ")));
+        }
+        if !read_as.is_empty() {
+            parts.push(format!(
+                "read {}",
+                read_as
+                    .iter()
+                    .map(|r| format!("{} as {}", r.asked, r.read_as))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        Self {
+            outcome,
+            coverage: round(found.coverage),
+            min_coverage: query.min_coverage,
+            known: round(found.known),
+            min_known: query.min_known,
+            short_of,
+            read_as,
+            unknown_terms,
+            summary: parts.join("; "),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -283,7 +423,8 @@ impl TacitServer {
                        provenance, and separately reports registered open questions your query \
                        meets. An outcome of `weak_matches` or `none` means the record does not \
                        settle the question — report that honestly rather than paraphrasing the \
-                       closest hit."
+                       closest hit. `why` carries the numbers the outcome was read from and the \
+                       words the record has never used, so a rephrasing is informed."
     )]
     fn search(&self, Parameters(params): Parameters<SearchParams>) -> Json<SearchOutput> {
         let mut store = self.store.lock().expect("store lock");
@@ -348,6 +489,7 @@ impl TacitServer {
                     count: beyond.count,
                     record: RecordOut::of(&store.ledger, beyond.record),
                 }),
+                why: WhyOut::of(&found, &query),
             }
         };
         store.record_call(

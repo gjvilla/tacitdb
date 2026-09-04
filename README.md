@@ -154,8 +154,10 @@ With Claude Desktop, or any client that reads the standard JSON form:
 ```
 
 The client then gets `tacit_search` with citations and calibrated
-abstention, `tacit_open_questions`, `tacit_propose_claim`, the pending
-inbox, and an audit log beside the store. Every start is a sync, so edit the
+abstention — and a `why` on every result: the numbers the outcome was read
+from, the bars, which fell short, and the words the record has never used —
+plus `tacit_open_questions`, `tacit_propose_claim`, the pending inbox, and
+an audit log beside the store. Every start is a sync, so edit the
 documents and restart: unchanged records write nothing, edited ones
 supersede what they replace. `tacit-mcp --help` lists the options.
 
