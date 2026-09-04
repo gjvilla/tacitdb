@@ -56,7 +56,7 @@ cargo run -p tacit-keeper --example golden      # the self-corpus suite, graded
 scripts/fetch-proposals.sh                      # fetch the pinned outside corpus
 cargo run -p tacit-keeper --example pep_golden  # the outside-corpus suite, graded
 cargo run -p tacit-mcp -- --store target/tacit.log .   # serve this repo's corpus over MCP, durably
-cargo run -p tacit-keeper -- pending --store target/tacit.log   # what agents proposed; promote|reject|retire rule on it
+cargo run -p tacit-keeper -- pending --store target/tacit.log   # what agents proposed; stop the host first — one process holds a store
 ```
 
 The measurement instruments (`explain`, `calibration`, `fusion_sweep`,
