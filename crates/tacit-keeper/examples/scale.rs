@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     rule("WHAT IT COST TO BUILD");
     let per = built.as_secs_f64() * 1e6 / ledger.log().len() as f64;
-    println!("  append             {:>8.2?}  ({per:.0} us/record)", built);
+    println!("  append             {built:>8.2?}  ({per:.0} us/record)");
     if store.is_some() {
         println!("  ^ one fsync per append (U-25); compare a run without --store");
     }
@@ -230,9 +230,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let retrieving = t.elapsed();
     println!("  both candidate lists      {:>8.2?}  ({} lexical, {} vector)", candidates, lex.len(), vec.len());
     println!("  fusing them               {:>8.2?}  ({} fused)", fusing, fused.len());
-    println!("  the whole retrieve        {:>8.2?}  ({} returned)", retrieving, whole.items.len());
-    println!("  admitting {} candidates {:>8.2?}", ids.len(), admitting);
-    println!("  the similarity itself     {:>8.2?}  (checksum {sum:.1})", arithmetic);
+    println!("  the whole retrieve        {retrieving:>8.2?}  ({} returned)", whole.items.len());
+    println!("  admitting {} candidates {admitting:>8.2?}", ids.len());
+    println!("  the similarity itself     {arithmetic:>8.2?}  (checksum {sum:.1})");
     println!(
         "  {admitted} admitted; admission is {:.0}x the arithmetic",
         admitting.as_secs_f64() / arithmetic.as_secs_f64().max(f64::MIN_POSITIVE)
