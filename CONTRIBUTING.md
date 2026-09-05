@@ -71,6 +71,22 @@ be. A commit message here says what changed, why the previous state was
 wrong, and what was deliberately not done; the counts at the end — tests,
 clippy, golden — are how the next reader knows what the commit's author saw.
 
+Signing here is by SSH key, not GPG. If you want yours signed the same way:
+
+```bash
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/id_ed25519.pub
+git config commit.gpgsign true
+gh ssh-key add ~/.ssh/id_ed25519.pub --type signing --title "tacit signing"   # the hosting page keeps its own list
+git log -1 --format='%G? %s'   # G once the key is in your allowed-signers file; N is unsigned
+```
+
+The fourth line is the one people miss. A key the hosting page already
+holds for authentication is not a signing key to it; the same public key
+is registered a second time, under the other type, or every signed commit
+reads Unverified there with the reason `unknown_key` — which is what this
+repository's own history said for its first day in public.
+
 ## Licence
 
 Tacit is dual-licensed under MIT or Apache-2.0, at your option
