@@ -290,4 +290,6 @@ crates stay `publish = false` until the name's counsel review completes
 ([D-0011](docs/DECISIONS.md)). If you arrived
 here with a question the record should answer and it does not, that is
 exactly the signal the register's U-8 is waiting to read — open an issue and
-say which layer you came for.
+say which layer you came for. If you mean to change something,
+[CONTRIBUTING.md](CONTRIBUTING.md) says what to run, why an edit to the
+record arrives as a proposal, and which gate cannot run on your machine.
