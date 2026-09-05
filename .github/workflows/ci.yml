@@ -1,0 +1,43 @@
+# The tests, clippy, and the golden suite — what CONTRIBUTING.md says to run,
+# run for every push and pull request. The boundary gate is deliberately not
+# here: its terms live outside every tree, this runner's included (D-0054).
+#
+# Two toolchains. The pinned one is the manifest's rust-version, so the pin
+# is checked rather than believed; stable is what a contributor has.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  check:
+    name: rust ${{ matrix.toolchain }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.88", stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: test
+        run: cargo test --workspace
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: rustdoc
+        run: cargo doc --workspace --no-deps
+      - name: golden
+        # Red on a regression, a fired trigger, a quoted question, or a
+        # drifted vocabulary — the recursion CONTRIBUTING.md describes.
+        run: cargo run -p tacit-keeper --example golden
