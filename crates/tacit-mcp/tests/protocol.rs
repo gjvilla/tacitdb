@@ -32,6 +32,13 @@ impl Host {
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
+        let response = self.exchange(method, params);
+        assert!(response.get("error").is_none(), "unexpected error: {response}");
+        response["result"].clone()
+    }
+
+    /// The whole response, error and all, for the tests that expect one.
+    fn exchange(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
         let id = self.next_id;
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
@@ -42,8 +49,19 @@ impl Host {
         self.stdout.read_line(&mut line).expect("read");
         let response: Value = serde_json::from_str(&line).expect("json response");
         assert_eq!(response["id"], id, "responses are read in order for one request at a time");
-        assert!(response.get("error").is_none(), "unexpected error: {response}");
-        response["result"].clone()
+        response
+    }
+
+    /// A tool call expected to be refused: the refusal's text, wherever the
+    /// transport put it — a JSON-RPC error or a result flagged `isError`.
+    fn refusal(&mut self, tool: &str, arguments: Value) -> String {
+        let response = self.exchange("tools/call", json!({"name": tool, "arguments": arguments}));
+        if let Some(error) = response.get("error") {
+            return error["message"].as_str().unwrap_or_default().to_string();
+        }
+        let result = &response["result"];
+        assert_eq!(result["isError"], true, "expected a refusal, got {response}");
+        result["content"][0]["text"].as_str().unwrap_or_default().to_string()
     }
 
     fn notify(&mut self, method: &str) {
@@ -285,6 +303,31 @@ fn an_identical_proposal_is_disclosed_and_folded_not_refused() {
         .filter(|r| r["text"] == text)
         .count();
     assert_eq!(queued_texts, 1, "one wording, one queue slot");
+}
+
+/// Blank text is refused at the boundary and nothing is written: a claim that
+/// says nothing would rank nowhere and still sit in a person's inbox.
+#[test]
+fn blank_text_is_refused_and_leaves_no_record() {
+    let mut host = Host::start();
+    let before = host.call("tacit_pending_proposals", json!({"limit": 500}))["count"].clone();
+    let open_before = host.call("tacit_open_questions", json!({}))["count"].clone();
+    for text in ["", "   ", "\n\t"] {
+        let refused = host.refusal(
+            "tacit_propose_claim",
+            json!({"text": text, "agent": "test-agent", "source": "test"}),
+        );
+        assert!(refused.contains("must say something"), "got {refused:?}");
+        let refused = host.refusal(
+            "tacit_register_gap",
+            json!({"question": text, "agent": "test-agent", "source": "test"}),
+        );
+        assert!(refused.contains("must say something"), "got {refused:?}");
+    }
+    let after = host.call("tacit_pending_proposals", json!({"limit": 500}))["count"].clone();
+    assert_eq!(before, after, "a refusal writes nothing");
+    let open_after = host.call("tacit_open_questions", json!({}))["count"].clone();
+    assert_eq!(open_before, open_after, "no blank question was registered");
 }
 
 /// An agent may contribute, and what it contributes stays proposed.

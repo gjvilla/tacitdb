@@ -57,6 +57,12 @@ pub enum Error {
     #[error("a redaction must state its reason — the legal basis or the request's provenance")]
     EmptyRedactionReason,
 
+    /// A claim with nothing said, or a question with nothing asked. Blank
+    /// text carries an envelope and no content: it would rank nowhere, answer
+    /// nothing, and still count as a record somebody must rule on.
+    #[error("a {what} must say something; blank text is not a record")]
+    EmptyText { what: &'static str },
+
     /// A husk whose mark names no redaction record is a forgery, not a
     /// removal: the receipt is what separates the two, and it is missing.
     #[error("record {record} is marked redacted by {by}, which is not a redaction of it")]

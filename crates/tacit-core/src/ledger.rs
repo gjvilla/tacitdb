@@ -308,6 +308,22 @@ impl Ledger {
             return Err(Error::UnstatedWithdrawReason);
         }
 
+        // Blank text is refused on the same path and for the same reason: a
+        // claim that says nothing and a question that asks nothing are
+        // illegal to write, not illegal to hold. The append is the only
+        // place an agent reaches, so this is where the boundary is; a log
+        // that somehow carries one still opens, and the record ranks nowhere.
+        let blank = match &draft.content {
+            Content::Claim(ClaimContent::Text { body, .. }) if body.trim().is_empty() => {
+                Some("claim")
+            }
+            Content::Gap(gap) if gap.question.trim().is_empty() => Some("question"),
+            _ => None,
+        };
+        if let Some(what) = blank {
+            return Err(Error::EmptyText { what });
+        }
+
         self.validate(&draft, recorded_at)?;
         let id = RecordId::mint();
         self.write(id, draft, recorded_at, ENVELOPE_VERSION, None)
@@ -1746,6 +1762,27 @@ mod tests {
             ))
             .unwrap_err();
         assert!(matches!(err, Error::IllegalTransition { .. }), "got {err}");
+    }
+
+    #[test]
+    fn blank_text_is_not_a_record() {
+        let (mut ledger, _, _) = setup();
+        let before = ledger.log().len();
+        for body in ["", "   ", "\n\t "] {
+            let err = ledger
+                .append(Draft::new(
+                    Author::agent("an-agent"),
+                    SourceRef::channel("mcp"),
+                    Content::Claim(ClaimContent::Text { body: body.into(), about: vec![] }),
+                ))
+                .unwrap_err();
+            assert!(matches!(err, Error::EmptyText { what: "claim" }), "got {err}");
+            let err = ledger.append(gap_draft(body)).unwrap_err();
+            assert!(matches!(err, Error::EmptyText { what: "question" }), "got {err}");
+        }
+        assert_eq!(ledger.log().len(), before, "nothing was written");
+        // A word is enough; the guard is against nothing, not against little.
+        ledger.append(gap_draft("why?")).unwrap();
     }
 
     #[test]
