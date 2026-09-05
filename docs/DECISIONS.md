@@ -2905,6 +2905,61 @@ honest as a record grows, and a first-time user is exactly who they protect).
 
 ---
 
+## D-0060 · The product evolves by trigger, and the owner's work is to make triggers fire
+
+```yaml
+id: D-0060
+state: promoted
+author: Greg Villa
+recorded: 2026-09-05
+valid_from: 2026-09-05
+source: the question asked once the scaffolding was in place — how does this
+  continue to evolve from here — answered by reading the register's open rows
+  and finding that every one waits on something outside the tree
+evidence: [docs/REGISTER.md U-8, docs/REGISTER.md U-23, docs/DECISIONS.md H-0001]
+review_trigger: when U-8's first signal arrives, whichever layer it names; or
+  when a second corpus has been in daily use long enough to move a row that
+  waits on measurable cost; or on 2027-02-23 with H-0001's score, whichever
+  comes first
+```
+
+**Assertion.** From this date the product is not advanced by adding to it.
+Every open row of the register is either dormant until a named event or is
+the owner's decision, and D-0046 closed retrieval as a front at this model
+scale. Engineering resumes on the day a trigger fires, and until then the
+owner's work is to create the conditions under which one can: put a second
+corpus under the engine and keep it there in daily use; go and get the
+signal U-8 was made observable for, reading it by that row's protocol;
+drive the host from the owner's own agent sessions so the audit file grows;
+and hold the two dated events, the re-read of U-6 after 2026-11-12 and the
+scoring of H-0001 on 2027-02-23, met or not.
+
+**Forces.** The second corpus is the one act that moves several rows at
+once. U-23 waits on a different corpus. U-18, U-24, U-25 and U-34 wait on a
+corpus that makes a scan cost measurable. H-0001's falsifier asks whether
+provenance and temporal questions still need workarounds outside the
+engine, which cannot be answered from six months of the corpus that wrote
+the question. D-0059 made any document-format corpus gradable against its
+own suite, so the instrument exists and only the use is missing. The
+signal, in turn, cannot arrive at an unannounced repository: U-8 is
+explicit that attention is not signal and a question someone needed
+answered is, so the point of announcing is to be asked. The two-layer bet
+(D-0002) defers the question of which layer has pull precisely so that
+evidence rather than taste answers it, and building either layer ahead of
+the evidence would spend the deferral.
+
+**Alternatives rejected.** Building the Python bindings, the in-engine
+graph algorithms (U-4), or any feature ahead of a signal naming a layer —
+that is the deferral D-0002 made, spent early. More retrieval plumbing —
+measured to net zero three times under D-0046, and the row says larger
+model or different corpus, not more pipes. Choosing a layer now by
+judgement — the register's own scar is that taste over evidence filed
+three of four shortfalls under a cause that did not explain them. Waiting
+without acting — the triggers name events that do not happen to an
+unannounced repository with one corpus.
+
+---
+
 ## H-0001 · Success hypothesis (dated, falsifiable)
 
 ```yaml
