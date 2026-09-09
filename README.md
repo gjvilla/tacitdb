@@ -214,6 +214,104 @@ was agreed. That last one needs a baseline; `GOLDEN_BASELINE=1` prints one
 to paste into the file after the first run.
 
 
+## Running it at an organization
+
+The sections above give the format and the commands. This is the loop they
+add up to, as a team would actually run it, from an empty directory to a
+record that agents consult and people rule on.
+
+**1. Write down what is already decided, with its envelope.** Someone — call
+them the keeper — creates a directory holding `docs/DECISIONS.md` and
+`docs/REGISTER.md`, in the format shown under [Your own corpus](#your-own-corpus).
+The founding pass is an interview, not a migration: ask the people who hold
+the organization's knowledge in their heads *"what are you already sure of
+here that is written nowhere?"*, and file each answer as a decision with an
+author, a source, a validity date, and the event that would make it worth
+re-reading. What nobody can settle goes into the register as an open
+question with an owner and a trigger. An organization that admits five
+things it does not know has a better record than one that claims to know
+everything.
+
+**2. Serve it, durably.** Build the host once and point it at the directory
+with a store file beside it:
+
+```bash
+cargo build --release -p tacit-mcp
+./target/release/tacit-mcp --store /path/to/acme.log /path/to/acme
+```
+
+Register that command with whichever MCP clients the team uses — Claude Code,
+Claude Desktop, an internal agent runner — as shown above. Every start is a
+sync, so the documents stay the source of truth: edit the markdown, restart
+the host, and edited records supersede what they replace while unchanged
+ones write nothing.
+
+**3. Let agents and people ask.** Day to day, most traffic is `tacit_search`.
+An answer arrives with citations; a miss arrives as an abstention with a
+`why` — the numbers, the bars, which fell short, and the words the record has
+never used — rather than a fluent guess. `tacit_open_questions` lets an agent
+say "the record does not settle this, and here is U-1, which resolves at the
+2027 audit" instead of inventing an answer. `tacit_as_of` and `tacit_history`
+answer what the record said at a past instant and every verdict that moved a
+record, which is what a post-mortem or an audit actually needs.
+`tacit_contradictions` surfaces promoted claims that disagree about the same
+subject, so the record's own inconsistencies are found by the engine rather
+than by the next person to trip over them.
+
+**4. Agents propose; nothing they do promotes.** When an agent learns
+something the record should hold, it calls `tacit_propose_claim`. The claim
+lands as `proposed` and waits. When it hits a question the record cannot
+answer and nobody has registered, it calls `tacit_register_gap`, and the gap
+becomes a citable open question with the agent named as the one who found
+it, closed only when a person answers it with a promoted claim. There is no
+promote tool. No sequence of agent calls, however well-intentioned,
+turns a proposal into something the organization knows. That absence is the
+design, not an omission.
+
+**5. A person rules on the inbox.** On whatever cadence fits — daily for a
+busy record, weekly for most — the keeper stops the host, which holds the
+store's lock, and reads what agents proposed:
+
+```bash
+cargo run -p tacit-keeper -- pending --store /path/to/acme.log
+```
+
+Each item is promoted, rejected, or left to wait, with a name and a rationale
+recorded as asserted. Or the keeper writes the decision straight into
+`docs/DECISIONS.md` and restarts, which is the same verdict by a different
+door. Decisions that events have overtaken are retired with a reason —
+`superseded`, `no-longer-true`, or `promoted-in-error` — never edited in
+place, so the history keeps saying what was believed and when.
+
+**6. Grade the record against itself.** The team writes `docs/GOLDEN.md`
+beside the other two files, as shown under [Grade your own record](#grade-your-own-record):
+questions the record should answer and which decision answers them,
+questions it should abstain on because a registered gap covers them, and
+questions it should abstain on because nothing here is about that subject.
+The runner grades all three, with abstention counted as a pass, and fails
+the build on anything nobody predicted. Run it in CI. A record that starts
+answering a question it used to abstain on has changed, and the suite is
+how the team finds out before a user does.
+
+**7. Keep the cadence.** The register's four rooms give the practice its
+rhythm. Before each new phase of work, run the interview from step 1 again;
+the knowledge that matters most is usually the kind nobody thought to write
+down. Quarterly, re-read every review trigger in the decisions file and the
+register, and retire whatever has been overtaken. Part of that re-read is
+mechanical: a trigger that names a question the register has since resolved
+fails the build until someone re-reads the record and rewords the trigger to
+name the resolving decision. The rest is the keeper's own work, and the
+suite in step 6 is what catches the drift the re-read misses.
+
+Three limits to plan around, restated from [Status](#status-stated-plainly):
+the two markdown files are the only ingest format today, so an organization
+whose decisions live in a ticket tracker or a wiki would write a parser
+against `tacit-core` — the proposals suite is the worked example, a few
+hundred lines; one process holds a store at a time, so the host and the
+keeper's verdicts take turns; and the name on a verdict is recorded as
+asserted, not verified, so the trust in the record is the trust in whoever
+has the keyboard.
+
 ## Using the engine directly
 
 `tacit-core` is an ordinary Rust library with no I/O of its own; the host and
