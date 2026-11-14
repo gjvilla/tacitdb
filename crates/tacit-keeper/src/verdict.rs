@@ -10,6 +10,11 @@
 //! (`Promote`, `Reject`, `Retire`), the append runs the same checks a
 //! transcribed verdict runs, and the tool surface still has no promote tool.
 //!
+//! `Withdraw` joined them on 2026-11-14 for the same reason seen from the
+//! other record kind: an agent's registered question has no register row to
+//! be withdrawn in, so a duplicate an agent registered stayed open until a
+//! person could say at the keyboard that it was never a separate question.
+//!
 //! What it says about identity is the honest minimum. The name is asserted
 //! at the keyboard, and the verdict's author detail records exactly that —
 //! as an [`Attestation::None`] with its reason, in the same vocabulary the
@@ -21,7 +26,7 @@
 use crate::attest::Attestation;
 use tacit_core::{
     Author, AuthorKind, Content, Draft, Error, Ledger, RecordId, RetireReason, SourceRef,
-    VerdictAction, VerdictContent,
+    VerdictAction, VerdictContent, WithdrawReason,
 };
 
 /// The envelope channel every keyboard verdict carries.
@@ -38,6 +43,9 @@ pub enum Ruling {
     Promote { target: RecordId, retiring: Option<RecordId> },
     Reject { target: RecordId },
     Retire { target: RecordId, reason: RetireReason },
+    /// A registered open question leaves the register unanswered. The one
+    /// ruling here whose target is a gap rather than a claim.
+    Withdraw { gap: RecordId, reason: WithdrawReason },
 }
 
 impl Ruling {
@@ -46,6 +54,7 @@ impl Ruling {
             Ruling::Promote { target, .. } | Ruling::Reject { target } | Ruling::Retire { target, .. } => {
                 *target
             }
+            Ruling::Withdraw { gap, .. } => *gap,
         }
     }
 
@@ -54,6 +63,7 @@ impl Ruling {
             Ruling::Promote { target, retiring } => VerdictAction::Promote { target, retiring },
             Ruling::Reject { target } => VerdictAction::Reject { target },
             Ruling::Retire { target, reason } => VerdictAction::Retire { target, reason },
+            Ruling::Withdraw { gap, reason } => VerdictAction::Withdraw { gap, reason },
         }
     }
 }
@@ -92,10 +102,93 @@ pub fn retire_reason(text: &str) -> Option<RetireReason> {
     }
 }
 
+/// The four reasons a question may be withdrawn, as a person types them.
+/// `Unstated` is not among them: it is what a log older than reasons reads
+/// as, and the ledger refuses a verdict that claims it.
+pub fn withdraw_reason(text: &str) -> Option<WithdrawReason> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "superseded" => Some(WithdrawReason::Superseded),
+        "answered-elsewhere" | "answered_elsewhere" => Some(WithdrawReason::AnsweredElsewhere),
+        "no-longer-relevant" | "no_longer_relevant" => Some(WithdrawReason::NoLongerRelevant),
+        "registered-in-error" | "registered_in_error" => Some(WithdrawReason::RegisteredInError),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tacit_core::{ClaimContent, ClaimState, RecordState};
+    use tacit_core::{ClaimContent, ClaimState, GapContent, GapState, RecordState};
+
+    fn question(ledger: &mut Ledger, text: &str) -> RecordId {
+        ledger
+            .append(Draft::new(
+                Author::agent("latency-bot"),
+                SourceRef::channel("test"),
+                Content::Gap(GapContent { question: text.into(), territory: vec![] }),
+            ))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_keyboard_withdrawal_closes_a_question_and_keeps_its_reason() {
+        let mut ledger = Ledger::new();
+        let gap = question(&mut ledger, "is p99 measured at the edge or the origin?");
+        assert_eq!(ledger.registered_gaps().len(), 1);
+
+        let verdict = render(
+            &mut ledger,
+            "Jordan Lee",
+            "duplicates U-11",
+            &Ruling::Withdraw { gap, reason: WithdrawReason::RegisteredInError },
+        )
+        .unwrap();
+        assert_eq!(ledger.state_of(gap), Some(RecordState::Gap(GapState::Withdrawn)));
+        assert!(ledger.registered_gaps().is_empty());
+
+        let record = ledger.record(verdict).unwrap();
+        assert_eq!(record.envelope().author().kind, AuthorKind::Human);
+        let Content::Verdict(content) = record.content() else { panic!("a verdict") };
+        assert_eq!(content.rationale.as_deref(), Some("duplicates U-11"));
+        assert!(matches!(
+            content.action,
+            VerdictAction::Withdraw { reason: WithdrawReason::RegisteredInError, .. }
+        ));
+    }
+
+    #[test]
+    fn a_withdrawal_is_refused_for_a_claim_and_for_a_question_already_closed() {
+        let mut ledger = Ledger::new();
+        let claim = proposal(&mut ledger, "a");
+        let on_a_claim = render(
+            &mut ledger,
+            "J",
+            "x",
+            &Ruling::Withdraw { gap: claim, reason: WithdrawReason::NoLongerRelevant },
+        );
+        assert!(on_a_claim.is_err(), "{on_a_claim:?}");
+        assert_eq!(ledger.state_of(claim), Some(RecordState::Claim(ClaimState::Proposed)));
+
+        let gap = question(&mut ledger, "q?");
+        let ruling = Ruling::Withdraw { gap, reason: WithdrawReason::Superseded };
+        render(&mut ledger, "J", "asked better elsewhere", &ruling).unwrap();
+        let twice = render(&mut ledger, "J", "again", &ruling);
+        assert!(matches!(twice, Err(Error::IllegalTransition { .. })), "{twice:?}");
+
+        let unstated =
+            render(&mut ledger, "J", "x", &Ruling::Withdraw { gap, reason: WithdrawReason::Unstated });
+        assert!(matches!(unstated, Err(Error::UnstatedWithdrawReason)), "{unstated:?}");
+    }
+
+    #[test]
+    fn withdraw_reasons_are_the_four_a_verdict_may_state() {
+        assert_eq!(withdraw_reason("superseded"), Some(WithdrawReason::Superseded));
+        assert_eq!(withdraw_reason("Answered-Elsewhere"), Some(WithdrawReason::AnsweredElsewhere));
+        assert_eq!(withdraw_reason("no_longer_relevant"), Some(WithdrawReason::NoLongerRelevant));
+        assert_eq!(withdraw_reason("registered-in-error"), Some(WithdrawReason::RegisteredInError));
+        assert_eq!(withdraw_reason("unstated"), None);
+        assert_eq!(withdraw_reason("because"), None);
+    }
 
     fn proposal(ledger: &mut Ledger, body: &str) -> RecordId {
         ledger

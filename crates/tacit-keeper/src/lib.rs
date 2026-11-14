@@ -25,7 +25,7 @@ pub use corpus::{
 pub use attest::{Attestation, Blame, Recheck, TrustReview, Verified, review_trust};
 pub use origin::Origin;
 pub use lock::{LockError, StoreLock, lock_path};
-pub use verdict::{Ruling, render, retire_reason};
+pub use verdict::{Ruling, render, retire_reason, withdraw_reason};
 pub use golden::{
     Expectation, GoldenQuestion, Graded, Scorecard, Verdict, absent_vocabulary, missing_baseline, parse_baseline, parse_golden, quoted_questions,
     stale_triggers, vocabulary_drift, run_configured,

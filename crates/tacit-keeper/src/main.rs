@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use tacit_core::{ClaimContent, Content, Ledger, RecordId};
-use tacit_keeper::{Ruling, StoreLock, render, retire_reason};
+use tacit_keeper::{Ruling, StoreLock, render, retire_reason, withdraw_reason};
 
 const USAGE: &str = "\
 tacit-keeper — render a person's verdict on a store
@@ -20,7 +20,11 @@ Usage:
   tacit-keeper promote --store <PATH> --as <NAME> --why <TEXT> <RECORD> [--retiring <RECORD>]
   tacit-keeper reject  --store <PATH> --as <NAME> --why <TEXT> <RECORD>
   tacit-keeper retire  --store <PATH> --as <NAME> --why <TEXT> --reason <REASON> <RECORD>
+  tacit-keeper withdraw --store <PATH> --as <NAME> --why <TEXT> --reason <REASON> <RECORD>
   tacit-keeper -h | --help
+
+promote, reject and retire rule on a claim. withdraw rules on a registered open
+question: it leaves the register unanswered, and stops being offered by search.
 
 Arguments:
   <RECORD>               A record id as the host prints it: rec_01M1P58RMFAD6DC86Q3D6JV6H2
@@ -33,7 +37,11 @@ Options:
                          thing the record exists to prevent.
   --retiring <RECORD>    promote only: a promoted claim this one replaces, retired by
                          the same verdict.
-  --reason <REASON>      retire only: superseded | no-longer-true | promoted-in-error
+  --reason <REASON>      retire: superseded | no-longer-true | promoted-in-error
+                         withdraw: superseded | answered-elsewhere |
+                         no-longer-relevant | registered-in-error (a duplicate, or
+                         settled before it was written down). Required for both.
+                         Name the question that replaces a withdrawn one in --why.
 
 The store is locked for the duration. If the host is serving it, stop the host
 first; the verdict is in the log when it next starts.
@@ -149,7 +157,7 @@ fn main() -> ExitCode {
             pending(&ledger);
             ExitCode::SUCCESS
         }
-        "promote" | "reject" | "retire" => match ruling(&args) {
+        "promote" | "reject" | "retire" | "withdraw" => match ruling(&args) {
             Ok((who, why, ruling)) => verdict(&mut ledger, &who, &why, &ruling),
             Err(message) => usage_error(&message),
         },
@@ -179,10 +187,23 @@ fn ruling(args: &Args) -> Result<(String, String, Ruling), String> {
             })?;
             Ruling::Retire { target, reason }
         }
+        "withdraw" => {
+            if args.retiring.is_some() {
+                return Err("--retiring belongs to promote".to_string());
+            }
+            let text = args.reason.as_deref().ok_or("--reason is required for withdraw")?;
+            let reason = withdraw_reason(text).ok_or_else(|| {
+                format!(
+                    "unknown reason {text:?}: superseded | answered-elsewhere | \
+                     no-longer-relevant | registered-in-error"
+                )
+            })?;
+            Ruling::Withdraw { gap: target, reason }
+        }
         other => return Err(format!("unknown command {other}")),
     };
-    if args.reason.is_some() && args.command != "retire" {
-        return Err("--reason belongs to retire".to_string());
+    if args.reason.is_some() && !matches!(args.command.as_str(), "retire" | "withdraw") {
+        return Err("--reason belongs to retire and withdraw".to_string());
     }
     Ok((who, why, ruling))
 }
