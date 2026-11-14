@@ -460,6 +460,7 @@ impl TacitServer {
     )]
     fn search(&self, Parameters(params): Parameters<SearchParams>) -> Json<SearchOutput> {
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let spec = if params.full_history {
             ViewSpec::now().with_states(StateFilter::All)
         } else if params.include_proposed {
@@ -542,6 +543,7 @@ impl TacitServer {
     ) -> Result<Json<RecordOut>, ErrorData> {
         let id = Self::parse_record(&params.record_id)?;
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let out = store
             .ledger
             .record(id)
@@ -562,6 +564,7 @@ impl TacitServer {
     ) -> Result<Json<HistoryOutput>, ErrorData> {
         let id = Self::parse_record(&params.record_id)?;
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let output = {
             let record = store
                 .ledger
@@ -589,6 +592,7 @@ impl TacitServer {
     fn open_questions(&self, Parameters(params): Parameters<OpenQuestionsParams>) -> Json<RecordsOutput> {
         let limit = params.limit.unwrap_or(25).clamp(1, 200);
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let records: Vec<RecordOut> = match &params.query {
             // Ranked by the same rule the search's gap offers use, because a
             // second ranking for the same intent would drift from the first.
@@ -632,6 +636,7 @@ impl TacitServer {
             .parse()
             .map_err(|_| bad_request(format!("{:?} is not an RFC3339 instant", params.at)))?;
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let record = store
             .ledger
             .record(id)
@@ -658,6 +663,7 @@ impl TacitServer {
     )]
     fn contradictions(&self) -> Json<RecordsOutput> {
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let records: Vec<RecordOut> = store
             .ledger
             .contradictions()
@@ -679,6 +685,7 @@ impl TacitServer {
     fn pending_proposals(&self, Parameters(params): Parameters<PendingParams>) -> Json<PendingOutput> {
         let limit = params.limit.unwrap_or(25).clamp(1, 200);
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let pending = store.ledger.pending_proposals();
         let superseded_and_not_queued = pending.superseded.len();
         let identical_and_folded = pending.identical.len();
@@ -715,6 +722,8 @@ impl TacitServer {
         Parameters(params): Parameters<ProposeClaimParams>,
     ) -> Result<Json<ProposedOutput>, ErrorData> {
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
+        store.writable().map_err(bad_request)?;
         let about = Self::resolve_entities(&store.ledger, &params.about)?;
         let draft = Draft::new(
             Author::agent(&params.agent),
@@ -762,6 +771,8 @@ impl TacitServer {
         Parameters(params): Parameters<RegisterGapParams>,
     ) -> Result<Json<ProposedOutput>, ErrorData> {
         let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
+        store.writable().map_err(bad_request)?;
         let territory = Self::resolve_entities(&store.ledger, &params.territory)?;
         let mut draft = Draft::new(
             Author::agent(&params.agent),
@@ -810,7 +821,8 @@ impl TacitServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TacitServer {
     fn get_info(&self) -> ServerInfo {
-        let store = self.store.lock().expect("store lock");
+        let mut store = self.store.lock().expect("store lock");
+        store.catch_up();
         let summary = format!(
             "{} records, {} entities, {} open questions.",
             store.ledger.log().len(),
@@ -819,6 +831,16 @@ impl ServerHandler for TacitServer {
         );
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("tacit", env!("CARGO_PKG_VERSION")))
-            .with_instructions(format!("{INSTRUCTIONS}\n\nThis store holds {summary}"))
+            .with_instructions(format!(
+                "{INSTRUCTIONS}\n\nThis store holds {summary}{}",
+                match store.read_only_because() {
+                    Some(holder) => format!(
+                        "\n\nThis host is read-only: {holder} holds the store. Searches and \
+                         reads work and see what it writes. `tacit_propose_claim` and \
+                         `tacit_register_gap` are refused until it exits."
+                    ),
+                    None => String::new(),
+                }
+            ))
     }
 }

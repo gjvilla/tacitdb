@@ -135,6 +135,27 @@ pub struct Recovery {
 /// Read the log, discarding a torn final line, and hand back the events for
 /// replay together with the journal to continue appending to.
 pub(crate) fn read(path: &Path) -> Result<(Vec<Event>, Journal, Recovery), Error> {
+    let (events, truncated_bytes) = scan(path, true)?;
+    let journal = Journal::open_for_append(path)?;
+    let recovery =
+        Recovery { events_replayed: events.len(), truncated_bytes, leads_clock: None };
+    Ok((events, journal, recovery))
+}
+
+/// Read the log and leave the file exactly as it was found: nothing is
+/// truncated, nothing is created, and no journal is handed back to append
+/// to. For a reader that does not hold the store. A torn final line is
+/// skipped rather than dropped — to this reader it is not a crash's residue
+/// but, as likely, the holder's append in flight, and cutting it off would
+/// be writing underneath the one process allowed to write.
+pub(crate) fn read_only(path: &Path) -> Result<(Vec<Event>, Recovery), Error> {
+    let (events, _) = scan(path, false)?;
+    let recovery =
+        Recovery { events_replayed: events.len(), truncated_bytes: 0, leads_clock: None };
+    Ok((events, recovery))
+}
+
+fn scan(path: &Path, repair: bool) -> Result<(Vec<Event>, u64), Error> {
     let corrupt = |line: usize, detail: String| Error::CorruptJournal {
         path: path.to_path_buf(),
         line,
@@ -176,7 +197,7 @@ pub(crate) fn read(path: &Path) -> Result<(Vec<Event>, Journal, Recovery), Error
             }
         }
 
-        if truncated_bytes > 0 {
+        if truncated_bytes > 0 && repair {
             let file = OpenOptions::new()
                 .write(true)
                 .open(path)
@@ -186,8 +207,5 @@ pub(crate) fn read(path: &Path) -> Result<(Vec<Event>, Journal, Recovery), Error
         }
     }
 
-    let journal = Journal::open_for_append(path)?;
-    let recovery =
-        Recovery { events_replayed: events.len(), truncated_bytes, leads_clock: None };
-    Ok((events, journal, recovery))
+    Ok((events, truncated_bytes))
 }

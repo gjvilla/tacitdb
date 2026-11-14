@@ -11,13 +11,22 @@ struct Host {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: i64,
+    /// What the host said of itself at `initialize`.
+    info: Value,
 }
 
 impl Host {
     /// Start the host over this repository's own corpus.
     fn start() -> Self {
+        Self::start_with(&[])
+    }
+
+    /// The same, with options ahead of the corpus — `--store <path>` for the
+    /// tests that need what one host wrote to be there for the next.
+    fn start_with(options: &[&str]) -> Self {
         let repo = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
         let mut child = Command::new(env!("CARGO_BIN_EXE_tacit-mcp"))
+            .args(options)
             .arg(repo)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -26,8 +35,8 @@ impl Host {
             .expect("host starts");
         let stdin = child.stdin.take().expect("stdin");
         let stdout = BufReader::new(child.stdout.take().expect("stdout"));
-        let mut host = Self { child, stdin, stdout, next_id: 0 };
-        host.initialize();
+        let mut host = Self { child, stdin, stdout, next_id: 0, info: Value::Null };
+        host.info = host.initialize();
         host
     }
 
@@ -766,4 +775,144 @@ fn a_queried_open_question_list_holds_every_gap_the_search_offered() {
             assert!(listed.contains(&&offered["id"]), "{query:?}: search offered {} and the list omits it", offered["id"]);
         }
     }
+}
+
+/// The other end of `tacit-keeper withdraw`: a question an agent registered,
+/// once a person withdraws it between two runs of the host, is neither listed
+/// as open nor offered by a search that used to offer it — and the record is
+/// still there to be read, in its new state, with the verdict that moved it.
+#[test]
+fn a_withdrawn_question_is_no_longer_offered() {
+    let dir = std::env::temp_dir().join(format!("tacit-host-withdraw-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = dir.join("store.log");
+    let store_arg = store.to_str().unwrap();
+    let query = "who settles quokka husbandry rotas when the wombat standup is cancelled";
+
+    let mut host = Host::start_with(&["--store", store_arg]);
+    let gap = host.call(
+        "tacit_register_gap",
+        json!({"question": format!("{query}?"), "agent": "test-agent", "source": "integration test"}),
+    );
+    let id = gap["record_id"].as_str().expect("id").to_string();
+    let offers = |host: &mut Host| -> (bool, bool, u64) {
+        let search = host.call("tacit_search", json!({"query": query}));
+        let listed = host.call("tacit_open_questions", json!({"limit": 200}));
+        let queried = host.call("tacit_open_questions", json!({"query": query, "limit": 200}));
+        let has = |records: &Value| records.as_array().unwrap().iter().any(|r| r["id"] == id.as_str());
+        (
+            has(&search["open_questions"]),
+            has(&listed["records"]) || has(&queried["records"]),
+            listed["count"].as_u64().unwrap(),
+        )
+    };
+    let (searched, listed, open_before) = offers(&mut host);
+    assert!(searched && listed, "the question is offered while it is open");
+    // The host holds the store; the keeper's turn comes when it has exited.
+    // Dropping it kills it, so the lock it leaves is a dead holder's and is
+    // taken over — the same path a crashed host leaves a keeper.
+    drop(host);
+
+    {
+        let _lock = tacit_keeper::StoreLock::acquire(&store, "protocol test").expect("the host let go");
+        let mut ledger = tacit_core::Ledger::open(&store).unwrap().ledger;
+        tacit_keeper::render(
+            &mut ledger,
+            "Jordan Lee",
+            "duplicates a numbered register row",
+            &tacit_keeper::Ruling::Withdraw {
+                gap: id.parse().unwrap(),
+                reason: tacit_core::WithdrawReason::RegisteredInError,
+            },
+        )
+        .expect("a registered question can be withdrawn");
+    }
+
+    let mut host = Host::start_with(&["--store", store_arg]);
+    let (searched, listed, open_after) = offers(&mut host);
+    assert!(!searched, "a withdrawn question is not offered by search");
+    assert!(!listed, "a withdrawn question is not listed as open");
+    assert_eq!(open_after, open_before - 1);
+
+    let fetched = host.call_checked("tacit_get_record", json!({"record_id": id}));
+    assert!(fetched["state"].as_str().unwrap().contains("Withdrawn"), "{fetched}");
+    let history = host.call_checked("tacit_history", json!({"record_id": id}));
+    let verdict = &history["verdicts"][0];
+    assert!(verdict["action"].as_str().unwrap().contains("registered in error"), "{verdict}");
+    assert_eq!(verdict["author"], "Jordan Lee");
+    assert_eq!(verdict["rationale"], "duplicates a numbered register row");
+}
+
+/// A second host on a held store reads it and does not write it. Every agent
+/// session launches its own host, and the second used to find the lock held
+/// and exit — its session saw a closed connection and no record at all (found
+/// 2026-11-14). One process still writes a store at a time; the second now
+/// serves what the first has written, sees what it writes next, refuses its
+/// own writes by naming the holder, and takes over once the holder is gone.
+#[test]
+fn a_second_host_reads_a_held_store_and_writes_only_once_it_is_free() {
+    let dir = std::env::temp_dir().join(format!("tacit-host-second-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = dir.join("store.log");
+    let store_arg = store.to_str().unwrap();
+    let lock = dir.join("store.lock");
+
+    let mut first = Host::start_with(&["--store", store_arg]);
+    let first_pid = first.child.id().to_string();
+    assert!(!first.info["instructions"].as_str().unwrap().contains("read-only"));
+
+    let mut second = Host::start_with(&["--store", store_arg]);
+    let said = second.info["instructions"].as_str().unwrap().to_string();
+    assert!(said.contains("read-only") && said.contains(&first_pid), "{said}");
+    let held = std::fs::read_to_string(&lock).unwrap();
+    assert_eq!(held.split_whitespace().next().unwrap(), first_pid, "the lock is still the first's");
+
+    // It answers from the record the first one loaded.
+    let found = second.call_checked(
+        "tacit_search",
+        json!({"query": "why is the runtime embedded rather than a server"}),
+    );
+    assert_eq!(found["is_abstention"], false, "{found}");
+    let open_at_start = second.call("tacit_open_questions", json!({}))["count"].as_u64().unwrap();
+
+    // Its own writes are refused, by name, and leave the log as it was.
+    let log_before = std::fs::read(&store).unwrap();
+    for (tool, arguments) in [
+        ("tacit_propose_claim", json!({"text": "a claim from the second host", "agent": "two", "source": "t"})),
+        ("tacit_register_gap", json!({"question": "a question from the second host?", "agent": "two", "source": "t"})),
+    ] {
+        let refused = second.refusal(tool, arguments);
+        assert!(refused.contains("read-only"), "{tool}: {refused}");
+        assert!(refused.contains(&format!("pid {first_pid}")), "{tool} names the holder: {refused}");
+    }
+    assert_eq!(std::fs::read(&store).unwrap(), log_before, "a refused write writes nothing");
+
+    // What the holder writes, the reader sees on its next call.
+    let gap = first.call(
+        "tacit_register_gap",
+        json!({"question": "who feeds the quokkas at the weekend?", "agent": "one", "source": "t"}),
+    );
+    let listed = second.call("tacit_open_questions", json!({"limit": 200}));
+    assert_eq!(listed["count"].as_u64().unwrap(), open_at_start + 1);
+    let fetched = second.call_checked("tacit_get_record", json!({"record_id": gap["record_id"]}));
+    assert_eq!(fetched["author"], "one");
+
+    // The holder goes; the reader's next write takes the store.
+    drop(first);
+    let claim = second.call(
+        "tacit_propose_claim",
+        json!({"text": "the second host wrote this once the store was free", "agent": "two", "source": "t"}),
+    );
+    assert_eq!(claim["state"], "proposed");
+    let held = std::fs::read_to_string(&lock).unwrap();
+    assert_eq!(held.split_whitespace().next().unwrap(), second.child.id().to_string());
+
+    // And it wrote to the log, not to its own memory: a host started after
+    // it — a reader now, since the second holds the store — can fetch it.
+    let mut third = Host::start_with(&["--store", store_arg]);
+    assert!(third.info["instructions"].as_str().unwrap().contains("read-only"));
+    let fetched = third.call_checked("tacit_get_record", json!({"record_id": claim["record_id"]}));
+    assert_eq!(fetched["author"], "two");
 }

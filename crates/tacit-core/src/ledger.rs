@@ -497,7 +497,29 @@ impl Ledger {
     /// because promotion is not a field — it is a fold over verdicts, and a
     /// forged verdict still has to be legal.
     pub fn open(path: impl AsRef<Path>) -> Result<Opened, Error> {
-        let (events, journal, mut recovery) = crate::journal::read(path.as_ref())?;
+        let (events, journal, recovery) = crate::journal::read(path.as_ref())?;
+        let mut ledger = Self::from_events(events)?;
+        ledger.journal = Some(journal);
+        Ok(Self::opened(ledger, recovery))
+    }
+
+    /// Replay a log this process does not hold, and leave the file alone.
+    ///
+    /// The same replay and the same checks as [`Ledger::open`], with two
+    /// differences that are the whole point: nothing on disk is touched — a
+    /// torn final line is skipped, not truncated, because to a reader it may
+    /// be the holder's append in flight — and the ledger that comes back has
+    /// no journal, so it is a view of the store and not a second writer of
+    /// it. Appending to it would only change this process's memory; a caller
+    /// serving it is expected to refuse writes rather than accept ones that
+    /// will not last.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Opened, Error> {
+        let (events, recovery) = crate::journal::read_only(path.as_ref())?;
+        let ledger = Self::from_events(events)?;
+        Ok(Self::opened(ledger, recovery))
+    }
+
+    fn from_events(events: Vec<Event>) -> Result<Ledger, Error> {
         let mut ledger = Ledger::new();
         for event in events {
             ledger.replay(event)?;
@@ -538,7 +560,10 @@ impl Ledger {
                 }
             }
         }
-        ledger.journal = Some(journal);
+        Ok(ledger)
+    }
+
+    fn opened(ledger: Ledger, mut recovery: Recovery) -> Opened {
         // Surfaced, not corrected: a log ahead of the clock means the machine's
         // clock moved, and a caller that silently swallowed that would be
         // hiding the one fact that explains the next refused append (U-22).
@@ -547,7 +572,7 @@ impl Ledger {
             .last_recorded_at
             .filter(|last| *last > now)
             .map(|last| last.duration_since(now));
-        Ok(Opened { ledger, recovery })
+        Opened { ledger, recovery }
     }
 
     fn replay(&mut self, event: Event) -> Result<(), Error> {

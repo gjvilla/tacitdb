@@ -501,3 +501,35 @@ fn an_agent_authored_set_verdict_cannot_load() {
     );
     let _ = SetBasis::Ingestion;
 }
+
+/// A reader that does not hold the store sees what is whole in the log and
+/// changes nothing: a torn tail — to it, as likely the holder's append in
+/// flight as a crash's residue — is skipped and left on disk, a missing file
+/// is not created, and the view has no journal to write through.
+#[test]
+fn a_read_only_open_sees_the_log_and_leaves_the_file_alone() {
+    let scratch = Scratch::new("read-only");
+    let absent = Ledger::open_read_only(scratch.path()).expect("no file is an empty store");
+    assert_eq!(absent.ledger.log().len(), 0);
+    assert!(!scratch.path().exists(), "a reader creates nothing");
+
+    let complete = {
+        let mut opened = Ledger::open(scratch.path()).unwrap();
+        let subject = opened.ledger.add_entity("process", "p").unwrap();
+        opened.ledger.append(claim(subject, "a whole claim", Author::human("G"))).unwrap();
+        opened.ledger.log().len()
+    };
+    let torn = format!("{}{{\"event\":\"rec", scratch.text());
+    scratch.write(&torn);
+
+    let view = Ledger::open_read_only(scratch.path()).expect("a torn tail does not stop a reader");
+    assert_eq!(view.ledger.log().len(), complete);
+    assert_eq!(view.recovery.truncated_bytes, 0, "nothing was dropped");
+    assert_eq!(scratch.text(), torn, "the file is byte for byte what it was");
+    assert!(view.ledger.journal_path().is_none(), "a view is not a second writer");
+
+    // Damage before the end is still corruption, to a reader as to a holder.
+    scratch.write(&format!("{{\"event\":\"rec\n{torn}"));
+    let error = Ledger::open_read_only(scratch.path()).expect_err("mid-file damage must refuse");
+    assert!(matches!(error, crate::error::Error::CorruptJournal { .. }), "got {error}");
+}

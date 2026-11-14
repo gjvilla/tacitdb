@@ -32,7 +32,12 @@ Arguments:
 Options:
   --store <PATH>         Keep the ledger on disk at PATH, with its audit log beside
                          it as PATH.audit and its lock as PATH.lock. Without it the
-                         ledger dies at exit.
+                         ledger dies at exit. One process writes a store at a time:
+                         if another already holds PATH, this host serves it
+                         read-only — searches and reads see what the holder writes,
+                         proposals are refused — and takes over on the first write
+                         after the holder exits. A read-only host does not sync
+                         CORPUS; the holder did.
   --require-signature    Decline to transcribe a promotion whose words no signed
                          commit carries; the claim stays proposed. The default
                          records what git can establish and says so in the verdict.
@@ -42,8 +47,9 @@ Options:
 
 The tool surface has no promote tool. What an agent proposes waits for a person,
 who rules on it with `tacit-keeper promote|reject|retire` against the same
---store (stop this host first; it holds the lock), or writes a decision into
-docs/DECISIONS.md. See the README's \"Your own corpus\" section.
+--store (stop the host that holds the lock first), or writes a decision into
+docs/DECISIONS.md. An open question an agent registered is withdrawn the same
+way, with `tacit-keeper withdraw`. See the README's \"Your own corpus\" section.
 ";
 
 #[tokio::main]
@@ -102,14 +108,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One process holds a store at a time (D-0015, made so by D-0055): the
     // lock is taken before the open and held until exit, so a verdict rendered
     // at the keyboard cannot land underneath this process, and this process
-    // cannot start underneath one being rendered.
-    let _lock = match &store {
+    // cannot write underneath one being rendered.
+    //
+    // A store someone else holds is served read-only rather than not at all.
+    // Every agent session starts its own host, so "the second cannot open
+    // it" meant the second session had no record — and saw only a closed
+    // connection, the reason having gone to a stderr nobody reads. Reading
+    // a log does not disturb its writer; writing is what the lock is for,
+    // and writing is what stays refused.
+    let lock = match &store {
         Some(path) => match StoreLock::acquire(path, "tacit-mcp") {
             Ok(lock) => {
                 if let Some(from) = &lock.took_over_from {
                     eprintln!("tacit-mcp: took over the lock from {from}");
                 }
                 Some(lock)
+            }
+            Err(tacit_keeper::LockError::Held { holder, pid, .. }) => {
+                let holder = format!("{holder} (pid {pid})");
+                eprintln!(
+                    "tacit-mcp: {} is held by {holder} — serving it read-only; proposals are \
+                     refused until the holder exits",
+                    path.display()
+                );
+                let state = match Store::following(path, &holder) {
+                    Ok(state) => state.with_audit(path.with_extension("audit")),
+                    Err(error) => {
+                        eprintln!("tacit-mcp: could not read {}: {error}", path.display());
+                        std::process::exit(1);
+                    }
+                };
+                eprintln!(
+                    "tacit-mcp: serving {} records on stdio (read-only: {})",
+                    state.ledger.log().len(),
+                    path.display()
+                );
+                let service =
+                    server::TacitServer::new(Arc::new(Mutex::new(state))).serve(stdio()).await?;
+                service.waiting().await?;
+                return Ok(());
             }
             Err(error) => {
                 eprintln!("tacit-mcp: {error}");
@@ -272,7 +309,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = match &store {
         Some(path) => {
             let audit = path.with_extension("audit");
-            Arc::new(Mutex::new(Store::new(ledger).with_audit(audit)))
+            let state = Store::new(ledger).with_audit(audit);
+            Arc::new(Mutex::new(match lock {
+                Some(lock) => state.holding(lock),
+                None => state,
+            }))
         }
         None => Arc::new(Mutex::new(Store::new(ledger))),
     };

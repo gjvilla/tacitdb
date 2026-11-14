@@ -6,7 +6,10 @@
 //! second process that writes the same log (D-0055), which is the event
 //! D-0022 named as its review trigger, and this module is the re-read's
 //! answer: two processes never write one log, because the second cannot
-//! open it.
+//! take the lock. (Since 2026-11-14 a second *host* that finds the store
+//! held serves it read-only instead of exiting — it replays the log without
+//! touching it and refuses writes. The rule here is about writers and is
+//! unchanged; `tacit-keeper` still refuses outright, since it only writes.)
 //!
 //! Why it matters more than politeness: the host holds the ledger in memory
 //! and appends to the file's end. A verdict appended underneath it by another

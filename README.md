@@ -178,10 +178,20 @@ cargo run -p tacit-keeper -- promote --store /path/to/acme.log \
 ```
 
 `reject` and `retire --reason <superseded|no-longer-true|promoted-in-error>`
-take the same shape. The name is recorded as asserted, not verified, and the
+take the same shape. So does `withdraw --reason
+<superseded|answered-elsewhere|no-longer-relevant|registered-in-error>`, which
+rules on a registered open question rather than a claim: the question leaves
+the register unanswered and is no longer offered by search. The name is recorded as asserted, not verified, and the
 verdict says so. The store is locked while either the host or the command
 holds it, so stop the host first; the verdict is in the log when it next
 starts.
+
+One process writes a store at a time, and more than one can read it. Each
+agent session starts its own host; the first takes the lock, and any other
+serves the same store read-only — its searches see what the holder writes, its
+proposals are refused with the holder's name, and it takes over on the first
+write after the holder exits. Only the holder syncs the documents, so an edit
+to `docs/` is picked up when a host next starts as the holder.
 
 ### Grade your own record
 
@@ -281,7 +291,10 @@ recorded as asserted. Or the keeper writes the decision straight into
 `docs/DECISIONS.md` and restarts, which is the same verdict by a different
 door. Decisions that events have overtaken are retired with a reason —
 `superseded`, `no-longer-true`, or `promoted-in-error` — never edited in
-place, so the history keeps saying what was believed and when.
+place, so the history keeps saying what was believed and when. An open
+question an agent registered that turns out to duplicate one already in the
+register is withdrawn the same way, as `registered-in-error`, with the
+rationale naming the question it duplicates.
 
 **6. Grade the record against itself.** The team writes `docs/GOLDEN.md`
 beside the other two files, as shown under [Grade your own record](#grade-your-own-record):
@@ -307,7 +320,7 @@ Three limits to plan around, restated from [Status](#status-stated-plainly):
 the two markdown files are the only ingest format today, so an organization
 whose decisions live in a ticket tracker or a wiki would write a parser
 against `tacit-core` — the proposals suite is the worked example, a few
-hundred lines; one process holds a store at a time, so the host and the
+hundred lines; one process writes a store at a time, so the host and the
 keeper's verdicts take turns; and the name on a verdict is recorded as
 asserted, not verified, so the trust in the record is the trust in whoever
 has the keyboard.

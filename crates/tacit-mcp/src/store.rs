@@ -13,7 +13,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tacit_core::{HashingEmbedder, Ledger, Projection, TextIndex, VectorIndex};
+use tacit_keeper::StoreLock;
 
 /// Bounded so a long-running host cannot grow without limit; the oldest
 /// entries fall off rather than being silently discarded on write.
@@ -36,6 +38,32 @@ pub struct Store {
     audit: Vec<AuditEntry>,
     dropped: usize,
     audit_path: Option<PathBuf>,
+    /// The store's lock, when this host holds it. Kept here rather than in
+    /// `main` so a host that started as a reader can take it later.
+    lock: Option<StoreLock>,
+    /// Present while this host is a reader of a store another process holds.
+    following: Option<Following>,
+}
+
+/// A store this host reads and does not hold (found 2026-11-14: every Claude
+/// session launches its own host over stdio, the second found the lock held
+/// and exited, and its session had no record at all). One process still
+/// writes a store at a time — that is D-0055 and it is untouched — but a
+/// second host no longer has to be blind to be harmless. It replays the log
+/// without touching it, replays it again when the file has changed, and
+/// refuses writes by name until the holder is gone, at which point the next
+/// write takes the lock and this host becomes the holder.
+struct Following {
+    path: PathBuf,
+    /// Who held the store when this host last asked, in the lock's words.
+    holder: String,
+    /// The log's length and modification time at the last replay.
+    seen: Option<(u64, SystemTime)>,
+}
+
+fn stamp(path: &Path) -> Option<(u64, SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
 }
 
 impl Store {
@@ -53,6 +81,90 @@ impl Store {
             audit: Vec::new(),
             dropped: 0,
             audit_path: None,
+            lock: None,
+            following: None,
+        }
+    }
+
+    /// Hold `lock` for as long as this store is served.
+    pub fn holding(mut self, lock: StoreLock) -> Self {
+        self.lock = Some(lock);
+        self
+    }
+
+    /// Serve the log at `path` as a reader, because `holder` has the store.
+    pub fn following(path: impl AsRef<Path>, holder: impl Into<String>) -> Result<Self, tacit_core::Error> {
+        let path = path.as_ref().to_path_buf();
+        // Stamped before the read: a write landing between the two is then
+        // seen as a change next time, at the cost of one spare replay.
+        let seen = stamp(&path);
+        let ledger = Ledger::open_read_only(&path)?.ledger;
+        let mut store = Self::new(ledger);
+        store.following = Some(Following { path, holder: holder.into(), seen });
+        Ok(store)
+    }
+
+    /// The holder's name while this host only reads; `None` once it writes.
+    pub fn read_only_because(&self) -> Option<&str> {
+        self.following.as_ref().map(|f| f.holder.as_str())
+    }
+
+    fn replace_ledger(&mut self, ledger: Ledger) {
+        self.projection = Projection::rebuild(&ledger);
+        self.index = TextIndex::rebuild(&ledger);
+        self.vectors = VectorIndex::rebuild(&ledger, &self.embedder);
+        self.ledger = ledger;
+    }
+
+    /// Before a read: if this host follows a store and the log has changed
+    /// since it last looked, replay it. A replay that fails — the holder
+    /// caught mid-rewrite — keeps the view it had, which was true a moment
+    /// ago, and tries again on the next call.
+    pub fn catch_up(&mut self) {
+        let Some(following) = &self.following else { return };
+        let now = stamp(&following.path);
+        if now == following.seen {
+            return;
+        }
+        if let Ok(opened) = Ledger::open_read_only(&following.path) {
+            self.replace_ledger(opened.ledger);
+            if let Some(following) = &mut self.following {
+                following.seen = now;
+            }
+        }
+    }
+
+    /// Before a write: a holder may write; a reader asks for the lock. If
+    /// the holder has gone, this host takes it, replays the log as a holder
+    /// does, and writes from then on. If not, the refusal says who has the
+    /// store and that reading still works — the write is the only thing a
+    /// second host cannot do.
+    pub fn writable(&mut self) -> Result<(), String> {
+        let Some(following) = &self.following else { return Ok(()) };
+        let path = following.path.clone();
+        match StoreLock::acquire(&path, "tacit-mcp") {
+            Ok(lock) => {
+                let opened = Ledger::open(&path)
+                    .map_err(|e| format!("could not open {} to write: {e}", path.display()))?;
+                self.replace_ledger(opened.ledger);
+                self.lock = Some(lock);
+                self.following = None;
+                Ok(())
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if let Some(following) = &mut self.following
+                    && let tacit_keeper::LockError::Held { holder, pid, .. } = &error
+                {
+                    following.holder = format!("{holder} (pid {pid})");
+                }
+                Err(format!(
+                    "this host is read-only, so nothing was written: {message}. Searching and \
+                     reading still work here and see what the holder writes. To record this, \
+                     use the session whose host holds the store, or retry once it has exited — \
+                     this host takes over on the first write after that."
+                ))
+            }
         }
     }
 
