@@ -521,3 +521,249 @@ fn a_served_store_is_held_and_released() {
     child.wait().expect("host exits when stdin closes");
     assert!(!lock.exists(), "lock released on exit");
 }
+
+/// The part of JSON Schema the declared output schemas actually use, checked
+/// by hand so the suite needs no validator crate: `$ref` into `$defs`,
+/// `required`, `properties`, `items`, and `type`. Returns every violation as
+/// a path, in the wording a client's validator reports them.
+fn schema_violations(schema: &Value, value: &Value, root: &Value, path: &str, out: &mut Vec<String>) {
+    let schema = match schema.get("$ref").and_then(Value::as_str) {
+        Some(reference) => {
+            let name = reference.rsplit('/').next().unwrap_or_default();
+            &root["$defs"][name]
+        }
+        None => schema,
+    };
+    let type_ok = |name: &str| match name {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "number" => value.is_number(),
+        "null" => value.is_null(),
+        _ => true,
+    };
+    match schema.get("type") {
+        Some(Value::String(name)) if !type_ok(name) => out.push(format!("{path} must be {name}")),
+        Some(Value::Array(names))
+            if !names.iter().filter_map(Value::as_str).any(&type_ok) =>
+        {
+            out.push(format!("{path} must be one of {names:?}"))
+        }
+        _ => {}
+    }
+    if let Some(object) = value.as_object() {
+        for required in schema.get("required").and_then(Value::as_array).into_iter().flatten() {
+            let name = required.as_str().unwrap_or_default();
+            if !object.contains_key(name) {
+                out.push(format!("{path} must have required property '{name}'"));
+            }
+        }
+        for (name, property) in schema.get("properties").and_then(Value::as_object).into_iter().flatten() {
+            if let Some(inner) = object.get(name) {
+                schema_violations(property, inner, root, &format!("{path}/{name}"), out);
+            }
+        }
+    }
+    if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
+        for (n, inner) in array.iter().enumerate() {
+            schema_violations(items, inner, root, &format!("{path}/{n}"), out);
+        }
+    }
+}
+
+impl Host {
+    /// Call a tool and hold its structured content to the output schema the
+    /// host itself declared for it — the check an MCP client runs before it
+    /// lets an agent see the answer.
+    fn call_checked(&mut self, tool: &str, arguments: Value) -> Value {
+        let listed = self.request("tools/list", json!({}));
+        let schema = listed["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .find(|t| t["name"] == tool)
+            .map(|t| t["outputSchema"].clone())
+            .unwrap_or_else(|| panic!("{tool} is not listed"));
+        assert!(schema.is_object(), "{tool} declares an output schema");
+        let result = self.request("tools/call", json!({"name": tool, "arguments": arguments}));
+        let structured = result["structuredContent"].clone();
+        let mut violations = Vec::new();
+        schema_violations(&schema, &structured, &schema, "data", &mut violations);
+        assert!(violations.is_empty(), "{tool} broke its own output schema: {violations:#?}");
+        structured
+    }
+}
+
+/// A record written through this surface carries no evidence and, unless the
+/// agent named entities, is about nothing. The declared schema requires both
+/// fields on every record, and the host used to omit them when empty — so the
+/// first agent-authored record in a store made every search that reached it
+/// fail the client's validation, and the agent saw an error instead of the
+/// record (found 2026-11-14 against a store holding two such records).
+#[test]
+fn a_record_an_agent_wrote_still_answers_in_the_declared_shape() {
+    let mut host = Host::start();
+    let claim = host.call_checked(
+        "tacit_propose_claim",
+        json!({
+            "text": "quokka husbandry rotas are settled at the wombat standup",
+            "agent": "test-agent",
+            "source": "integration test"
+        }),
+    );
+    let claim_id = claim["record_id"].as_str().expect("id").to_string();
+    let gap = host.call_checked(
+        "tacit_register_gap",
+        json!({
+            "question": "who settles quokka husbandry rotas when the wombat standup is cancelled?",
+            "agent": "test-agent",
+            "source": "integration test"
+        }),
+    );
+    let gap_id = gap["record_id"].as_str().expect("id").to_string();
+
+    let found = host.call_checked(
+        "tacit_search",
+        json!({"query": "quokka husbandry rotas wombat standup", "include_proposed": true}),
+    );
+    let item = found["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == claim_id.as_str())
+        .expect("the search reaches the agent's claim");
+    assert_eq!(item["source_channel"], "mcp");
+    assert_eq!(item["evidence"], json!([]), "no evidence is said, not left out");
+    assert_eq!(item["about"], json!([]));
+    assert!(
+        found["open_questions"].as_array().unwrap().iter().any(|g| g["id"] == gap_id.as_str()),
+        "the search offers the agent's open question: {found}"
+    );
+
+    // Every other tool that hands back a record, over the same two records.
+    host.call_checked("tacit_search", json!({"query": "quokka husbandry rotas", "full_history": true}));
+    for id in [&claim_id, &gap_id] {
+        host.call_checked("tacit_get_record", json!({"record_id": id}));
+        host.call_checked("tacit_history", json!({"record_id": id}));
+        host.call_checked("tacit_as_of", json!({"record_id": id, "at": "2020-01-01T00:00:00Z"}));
+    }
+    host.call_checked("tacit_open_questions", json!({"limit": 200}));
+    host.call_checked("tacit_open_questions", json!({"query": "quokka husbandry rotas"}));
+    host.call_checked("tacit_pending_proposals", json!({"limit": 200}));
+    host.call_checked("tacit_contradictions", json!({}));
+    host.call_checked("tacit_audit", json!({}));
+}
+
+/// The form a record's `about` is printed in is the form `territory` and
+/// `about` accept. An agent only ever sees entities as `kind:label` —
+/// `decision:D-0012` — and both tools used to take nothing but an `ent_…` id
+/// that no tool output shows, so a territory could not be named at all.
+#[test]
+fn a_territory_is_named_the_way_the_record_prints_it() {
+    let mut host = Host::start();
+    let found = host.call("tacit_search", json!({"query": "why is the runtime embedded rather than a server"}));
+    let about = found["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|i| i["about"].as_array().cloned().unwrap_or_default())
+        .find_map(|a| a.as_str().filter(|a| a.starts_with("decision:")).map(str::to_string))
+        .expect("a served decision says what it is about");
+
+    let gap = host.call_checked(
+        "tacit_register_gap",
+        json!({
+            "question": "does the embedded runtime survive a second writer process?",
+            "agent": "test-agent",
+            "source": "integration test",
+            "territory": [about]
+        }),
+    );
+    assert_eq!(gap["state"], "registered");
+    let fetched = host.call_checked("tacit_get_record", json!({"record_id": gap["record_id"]}));
+    assert_eq!(fetched["about"], json!([about]), "the territory round-trips");
+
+    let claim = host.call_checked(
+        "tacit_propose_claim",
+        json!({
+            "text": "the embedded runtime was chosen before any second writer existed",
+            "agent": "test-agent",
+            "source": "integration test",
+            "about": [about]
+        }),
+    );
+    let fetched = host.call_checked("tacit_get_record", json!({"record_id": claim["record_id"]}));
+    assert_eq!(fetched["about"], json!([about]));
+}
+
+/// Naming an entity never mints one: a topic word or a decision the record
+/// does not hold is refused, nothing is written, and the refusal says what a
+/// valid name looks like rather than only that this one is not.
+#[test]
+fn an_unknown_territory_is_refused_with_the_form_that_would_work() {
+    let mut host = Host::start();
+    let open_before = host.call("tacit_open_questions", json!({}))["count"].clone();
+    let pending_before = host.call("tacit_pending_proposals", json!({}))["count"].clone();
+    for name in ["concealment", "decision:D-9999", "ent_not-a-ulid", "ent_01ARZ3NDEKTSV4RRFFQ69G5FAV"] {
+        for (tool, arguments) in [
+            (
+                "tacit_register_gap",
+                json!({"question": "is this territory real?", "agent": "t", "source": "t", "territory": [name]}),
+            ),
+            (
+                "tacit_propose_claim",
+                json!({"text": "this claim is about something", "agent": "t", "source": "t", "about": [name]}),
+            ),
+        ] {
+            let refused = host.refusal(tool, arguments);
+            assert!(refused.contains(name), "{tool} names what it refused: {refused:?}");
+            assert!(refused.contains("decision:D-0012"), "{tool} shows the valid form: {refused:?}");
+        }
+    }
+    assert_eq!(open_before, host.call("tacit_open_questions", json!({}))["count"]);
+    assert_eq!(pending_before, host.call("tacit_pending_proposals", json!({}))["count"]);
+}
+
+/// The parameter says what it takes before anyone has to be refused.
+#[test]
+fn the_entity_parameters_describe_the_form_they_accept() {
+    let mut host = Host::start();
+    let listed = host.request("tools/list", json!({}));
+    for (tool, parameter) in [("tacit_register_gap", "territory"), ("tacit_propose_claim", "about")] {
+        let description = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == tool)
+            .map(|t| t["inputSchema"]["properties"][parameter]["description"].clone())
+            .unwrap();
+        assert!(
+            description.as_str().is_some_and(|d| d.contains("decision:D-0012")),
+            "{tool}.{parameter} is described as: {description}"
+        );
+    }
+}
+
+/// `tacit_open_questions` with a query promises the search's own gap rule,
+/// and used to run half of it: the search lets a gap in by coverage or by
+/// similarity, this tool had no vectors and so only coverage. Every open
+/// question the search offers for a question, this tool lists for it too.
+#[test]
+fn a_queried_open_question_list_holds_every_gap_the_search_offered() {
+    let mut host = Host::start();
+    for query in [
+        "why is the runtime embedded rather than a server",
+        "which embedding model supplies vector candidates",
+        "who may promote a claim and how is that proven",
+        "how are redactions recorded",
+    ] {
+        let search = host.call("tacit_search", json!({"query": query}));
+        let listed = host.call("tacit_open_questions", json!({"query": query, "limit": 200}));
+        let listed: Vec<&Value> = listed["records"].as_array().unwrap().iter().map(|r| &r["id"]).collect();
+        for offered in search["open_questions"].as_array().unwrap() {
+            assert!(listed.contains(&&offered["id"]), "{query:?}: search offered {} and the list omits it", offered["id"]);
+        }
+    }
+}

@@ -343,7 +343,10 @@ pub struct ProposeClaimParams {
     pub agent: String,
     /// Where this came from — a conversation, a document, an observation.
     pub source: String,
-    /// Entity ids (`ent_...`) this claim is about, if known.
+    /// Entities this claim is about, if known — each named the way a record's
+    /// `about` prints it, `kind:label`, e.g. `decision:D-0012`. Only entities
+    /// the record already holds can be named; a topic word is not one. An
+    /// `ent_...` id is also accepted.
     #[serde(default)]
     pub about: Vec<String>,
 }
@@ -354,6 +357,11 @@ pub struct RegisterGapParams {
     pub question: String,
     pub agent: String,
     pub source: String,
+    /// Entities the question falls on — each named the way a record's `about`
+    /// prints it, `kind:label`, e.g. `decision:D-0012`. Only entities the
+    /// record already holds can be named; a topic word is not one, and
+    /// belongs in the question's own wording. An `ent_...` id is also
+    /// accepted. Omit when the question sits on no recorded entity.
     #[serde(default)]
     pub territory: Vec<String>,
     /// The event that should force this question to be answered.
@@ -411,9 +419,33 @@ impl TacitServer {
         id.parse::<RecordId>().map_err(|e| bad_request(e.to_string()))
     }
 
-    fn parse_entities(ids: &[String]) -> Result<Vec<EntityId>, ErrorData> {
-        ids.iter()
-            .map(|id| id.parse::<EntityId>().map_err(|e| bad_request(e.to_string())))
+    /// Resolve the names an agent gave for entities. An agent only ever sees
+    /// an entity as the `kind:label` a record's `about` prints, so that is
+    /// the form taken back; an `ent_…` id is accepted for callers that hold
+    /// one. Naming resolves against what the ledger already holds and never
+    /// mints — a territory nobody recorded is refused, with the form that
+    /// would have worked, rather than conjured.
+    fn resolve_entities(ledger: &tacit_core::Ledger, names: &[String]) -> Result<Vec<EntityId>, ErrorData> {
+        const FORM: &str = "name an entity the way a record's `about` prints it — `kind:label`, \
+                            e.g. `decision:D-0012` — or by its `ent_...` id; only entities already \
+                            in the record can be named, and a topic word is not one";
+        names
+            .iter()
+            .map(|name| {
+                let name = name.trim();
+                if let Ok(id) = name.parse::<EntityId>() {
+                    return match ledger.entity(id) {
+                        Some(_) => Ok(id),
+                        None => Err(bad_request(format!("{name:?} is not an entity in this record: {FORM}"))),
+                    };
+                }
+                match name.split_once(':') {
+                    Some((kind, label)) => ledger.find_entity(kind.trim(), label.trim()).ok_or_else(|| {
+                        bad_request(format!("{name:?} names no entity in this record: {FORM}"))
+                    }),
+                    None => Err(bad_request(format!("{name:?} is not a valid entity name: {FORM}"))),
+                }
+            })
             .collect()
     }
 
@@ -563,11 +595,14 @@ impl TacitServer {
             Some(question) => {
                 let mut query = Query::text(question);
                 query.gap_budget = limit;
-                let retriever = store.index.retriever(
-                    &store.ledger,
-                    &store.projection,
-                    ViewSpec::now(),
-                );
+                // With the vectors, as the search has them: a gap is let in
+                // by coverage *or* closeness, and without this half of the
+                // rule a question the search offered three gaps for came
+                // back here with none (found 2026-11-14).
+                let retriever = store
+                    .index
+                    .retriever(&store.ledger, &store.projection, ViewSpec::now())
+                    .with_vectors(&store.vectors, &store.embedder);
                 let found = retriever.retrieve(&query);
                 found.gaps.iter().map(|r| RecordOut::of(&store.ledger, r)).collect()
             }
@@ -679,8 +714,8 @@ impl TacitServer {
         &self,
         Parameters(params): Parameters<ProposeClaimParams>,
     ) -> Result<Json<ProposedOutput>, ErrorData> {
-        let about = Self::parse_entities(&params.about)?;
         let mut store = self.store.lock().expect("store lock");
+        let about = Self::resolve_entities(&store.ledger, &params.about)?;
         let draft = Draft::new(
             Author::agent(&params.agent),
             SourceRef {
@@ -726,8 +761,8 @@ impl TacitServer {
         &self,
         Parameters(params): Parameters<RegisterGapParams>,
     ) -> Result<Json<ProposedOutput>, ErrorData> {
-        let territory = Self::parse_entities(&params.territory)?;
         let mut store = self.store.lock().expect("store lock");
+        let territory = Self::resolve_entities(&store.ledger, &params.territory)?;
         let mut draft = Draft::new(
             Author::agent(&params.agent),
             SourceRef { channel: "mcp".into(), reference: Some(params.source.clone()) },

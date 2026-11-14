@@ -38,10 +38,15 @@ pub struct RecordOut {
     pub recorded_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_trigger: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Always present, empty when the record cites none — which is what a
+    /// record an agent wrote through this surface looks like. The declared
+    /// schema requires the field, and "no evidence" is a fact about a record
+    /// worth saying rather than leaving a reader to infer from an absence.
     pub evidence: Vec<EvidenceOut>,
-    /// Labels of the entities this record is about.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The entities this record is about, each as `kind:label`
+    /// (`decision:D-0012`). Always present, empty when it names none. This
+    /// is the form `tacit_register_gap`'s `territory` and
+    /// `tacit_propose_claim`'s `about` take back.
     pub about: Vec<String>,
     /// Present when part of this record was withheld by a declared redaction
     /// (U-11): the id of the redaction record that ordered it, whose reason
